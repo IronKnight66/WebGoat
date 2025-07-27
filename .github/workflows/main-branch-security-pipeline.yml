@@ -188,7 +188,7 @@ jobs:
             
       - name: Create GitHub Issues for new vulnerabilities
         id: create-issues
-        if: fromJSON(steps.compare-results.outputs.has_new_vulnerabilities)
+        if: steps.compare-results.outputs.has_new_vulnerabilities == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}

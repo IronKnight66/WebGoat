@@ -185,7 +185,7 @@ jobs:
             
       - name: Compare with tracked issues
         id: compare-issues
-        if: fromJSON(steps.fresh-scan.outputs.rescan_completed)
+        if: steps.fresh-scan.outputs.rescan_completed == 'true'
         run: |
           python3 -c "
           import json
