@@ -9,454 +9,260 @@ on:
       - 'pom.xml'
       - 'Dockerfile'
       - '.github/workflows/**'
+      - '.github/dependabot.yml'
       - 'src/**'
 
 permissions:
   contents: read
-  issues: write
   pull-requests: write
-  security-events: write
+  security-events: read
   actions: read
-  checks: write
+  issues: write
 
 jobs:
   security-scan:
-    name: 🔍 Security Vulnerability Scan
+    name: Security Vulnerability Scan
     runs-on: ubuntu-latest
     
     steps:
-      - name: 📥 Checkout Feature Branch
+      - name: Checkout feature branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: ☕ Set up JDK 17
+          
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
-
-      - name: 📦 Cache Maven dependencies
+          
+      - name: Cache Maven dependencies
         uses: actions/cache@v4
         with:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-
-      - name: 🔍 Security Vulnerability Analysis
-        id: dependabot-scan
+          
+      - name: Build project for dependency analysis
+        run: |
+          mvn clean compile -DskipTests
+          
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        
+      - name: Get Dependabot vulnerability alerts
+        id: get-alerts
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
-              // First, let's check what permissions we have
-              console.log('🔍 Checking repository and token permissions...');
-              
-              // Check repository security settings
-              const { data: repo } = await github.rest.repos.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-              
-              console.log(`Repository: ${repo.full_name}`);
-              console.log(`Private: ${repo.private}`);
-              console.log(`Security analysis enabled: ${repo.security_and_analysis?.advanced_security?.status || 'unknown'}`);
-              
-              // Try to get repository vulnerability alerts
-              const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
+              // Get all Dependabot alerts for the repository
+              const alerts = await github.rest.dependabot.listAlertsForRepo({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 state: 'open',
-                sort: 'created',
-                direction: 'desc'
+                per_page: 100
               });
               
-              console.log(`✅ Successfully accessed Dependabot alerts: Found ${alerts.length} open vulnerability alerts`);
+              console.log(`Found ${alerts.data.length} open Dependabot alerts`);
               
-              // Filter for medium+ severity vulnerabilities
-              const mediumPlusVulns = alerts.filter(alert => {
-                const severity = alert.security_vulnerability.severity.toLowerCase();
-                return ['medium', 'high', 'critical'].includes(severity);
-              });
+              // Filter alerts and categorize by severity
+              const vulnerabilities = alerts.data.map(alert => ({
+                number: alert.number,
+                state: alert.state,
+                dependency: alert.dependency.package.name,
+                vulnerable_version_range: alert.dependency.manifest_path,
+                patched_version: alert.security_advisory.patched_versions?.[0] || 'Unknown',
+                vulnerability: {
+                  cve_id: alert.security_advisory.cve_id || `GHSA-${alert.security_advisory.ghsa_id}`,
+                  summary: alert.security_advisory.summary,
+                  description: alert.security_advisory.description,
+                  severity: alert.security_advisory.severity,
+                  cvss_score: alert.security_advisory.cvss?.score || 'N/A',
+                  references: alert.security_advisory.references || []
+                },
+                created_at: alert.created_at,
+                updated_at: alert.updated_at
+              }));
               
-              console.log(`Found ${mediumPlusVulns.length} medium+ severity vulnerabilities`);
+              // Categorize by severity
+              const high_vulnerabilities = vulnerabilities.filter(v => 
+                ['high', 'critical'].includes(v.vulnerability.severity.toLowerCase())
+              );
+              const medium_vulnerabilities = vulnerabilities.filter(v => 
+                v.vulnerability.severity.toLowerCase() === 'medium'
+              );
               
-              // Set outputs for next steps
-              core.setOutput('total-vulns', alerts.length);
-              core.setOutput('medium-plus-vulns', mediumPlusVulns.length);
-              core.setOutput('vulnerabilities', JSON.stringify(mediumPlusVulns));
-              core.setOutput('scan-method', 'dependabot-api');
-              core.setOutput('scan-status', 'success');
+              // Save vulnerability data
+              const fs = require('fs');
+              const vulnData = {
+                total: vulnerabilities.length,
+                high: high_vulnerabilities,
+                medium: medium_vulnerabilities,
+                low: vulnerabilities.filter(v => 
+                  v.vulnerability.severity.toLowerCase() === 'low'
+                )
+              };
               
-              return mediumPlusVulns;
+              fs.writeFileSync('./vulnerability_details.json', JSON.stringify(vulnData, null, 2));
+              
+              // Set outputs
+              core.setOutput('total_count', vulnerabilities.length);
+              core.setOutput('high_count', high_vulnerabilities.length);
+              core.setOutput('medium_count', medium_vulnerabilities.length);
+              core.setOutput('scan_completed', 'true');
+              
+              return vulnerabilities.length;
+              
             } catch (error) {
-              console.error('❌ Dependabot API Error Details:');
-              console.error(`Status: ${error.status}`);
-              console.error(`Message: ${error.message}`);
-              console.error(`URL: ${error.request?.url}`);
-              
-              if (error.response?.headers) {
-                console.error('Response headers:');
-                const relevantHeaders = ['x-accepted-github-permissions', 'x-oauth-scopes', 'x-accepted-oauth-scopes'];
-                relevantHeaders.forEach(header => {
-                  if (error.response.headers[header]) {
-                    console.error(`  ${header}: ${error.response.headers[header]}`);
-                  }
-                });
-              }
-              
-              // Handle 403 errors with more specific diagnostics
-              if (error.status === 403) {
-                console.log('🔍 Diagnosing 403 Forbidden Error...');
-                
-                // Check if it's a token permission issue
-                if (error.response?.headers['x-accepted-github-permissions']) {
-                  console.log('📋 Required permissions:', error.response.headers['x-accepted-github-permissions']);
-                }
-                
-                console.log('💡 Possible causes:');
-                console.log('1. Repository-level: Dependabot alerts not enabled');
-                console.log('2. Organization-level: Security policies blocking access');
-                console.log('3. Token-level: GITHUB_TOKEN lacks required permissions');
-                console.log('4. Feature-level: Dependabot not configured for this repository');
-                
-                console.log('🔧 Recommended fixes:');
-                console.log('1. Check: Repository Settings → Security & analysis → Dependabot alerts');
-                console.log('2. Check: Organization security policies');
-                console.log('3. Try: Using a Personal Access Token with security:read scope');
-                console.log('4. Verify: Dependabot.yml configuration exists');
-                
-                // Set fallback outputs with diagnostic info
-                core.setOutput('total-vulns', 0);
-                core.setOutput('medium-plus-vulns', 0);
-                core.setOutput('vulnerabilities', JSON.stringify([]));
-                core.setOutput('scan-method', 'fallback-required');
-                core.setOutput('scan-status', 'limited');
-                core.setOutput('error-reason', 'Dependabot API access denied - check permissions and configuration');
-                core.setOutput('error-details', JSON.stringify({
-                  status: error.status,
-                  message: error.message,
-                  requiredPermissions: error.response?.headers['x-accepted-github-permissions'] || 'unknown'
-                }));
-                
-                return [];
-              } else {
-                // For other errors, fail the workflow
-                core.setFailed(`Failed to fetch vulnerability alerts: ${error.message}`);
-              }
+              console.error('Error fetching Dependabot alerts:', error);
+              core.setOutput('scan_completed', 'false');
+              core.setOutput('total_count', 0);
+              core.setOutput('high_count', 0);
+              core.setOutput('medium_count', 0);
+              return 0;
             }
-
-      - name: 🔧 Advanced Troubleshooting
-        if: steps.dependabot-scan.outputs.scan-method == 'fallback-required'
-        id: troubleshooting
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            console.log('🔍 Running Advanced Troubleshooting...');
             
-            try {
-              // Check if Dependabot is actually configured
-              console.log('📋 Checking Dependabot configuration...');
-              
-              // Try to get dependabot.yml file
-              try {
-                const { data: dependabotConfig } = await github.rest.repos.getContent({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  path: '.github/dependabot.yml'
-                });
-                console.log('✅ Dependabot configuration found');
-              } catch (configError) {
-                if (configError.status === 404) {
-                  console.log('⚠️ No .github/dependabot.yml found - Dependabot may not be configured');
-                  console.log('💡 This could explain why Dependabot alerts API is not accessible');
-                } else {
-                  console.log('❓ Could not check Dependabot configuration');
-                }
-              }
-              
-              // Check organization settings
-              console.log('🏢 Checking organization permissions...');
-              try {
-                const { data: org } = await github.rest.orgs.get({
-                  org: context.repo.owner
-                });
-                console.log(`Organization: ${org.login}`);
-                console.log(`Advanced Security enabled for org: ${org.advanced_security_enabled_for_new_repositories || 'unknown'}`);
-              } catch (orgError) {
-                console.log('📝 Repository may be personal (not organization)');
-              }
-              
-              console.log('');
-              console.log('🚀 SOLUTIONS TO TRY:');
-              console.log('');
-              console.log('1. VERIFY DEPENDABOT IS ENABLED:');
-              console.log('   → Go to: Repository Settings → Security & analysis');
-              console.log('   → Ensure "Dependabot alerts" is enabled');
-              console.log('   → Ensure "Dependabot security updates" is enabled');
-              console.log('');
-              console.log('2. CHECK DEPENDABOT CONFIGURATION:');
-              console.log('   → Ensure .github/dependabot.yml exists and is valid');
-              console.log('   → Run a manual Dependabot check to populate alerts');
-              console.log('');
-              console.log('3. ORGANIZATION SETTINGS (if applicable):');
-              console.log('   → Organization Settings → Security & analysis');
-              console.log('   → Check if organization policies allow Dependabot');
-              console.log('');
-              console.log('4. ALTERNATIVE: USE PERSONAL ACCESS TOKEN');
-              console.log('   → Create PAT with "security:read" scope');
-              console.log('   → Add as repository secret: SECURITY_TOKEN');
-              console.log('   → Modify workflow to use: secrets.SECURITY_TOKEN');
-              
-            } catch (error) {
-              console.error('Error in troubleshooting:', error.message);
-            }
-
-      - name: 🔧 Fallback Maven Security Check
-        if: steps.dependabot-scan.outputs.scan-method == 'fallback-required'
-        id: maven-security-check
+      - name: Generate vulnerability report comment
+        id: generate-comment
+        if: steps.get-alerts.outputs.total_count > 0
         run: |
-          echo "🔍 Running Maven OWASP Dependency Check as fallback..."
+          python3 -c "
+          import json
+          import os
           
-          # Check if OWASP dependency check plugin is configured
-          if grep -q "org.owasp" pom.xml; then
-            echo "✅ OWASP plugin found in pom.xml"
-            mvn org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=7 -DsuppressionFiles=config/dependency-check/project-suppression.xml || true
-            
-            # Check if report was generated
-            if [ -f "target/dependency-check-report.html" ]; then
-              echo "📊 Security report generated"
-              echo "has-report=true" >> $GITHUB_OUTPUT
-            else
-              echo "⚠️ No security report generated"
-              echo "has-report=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "⚠️ OWASP dependency check plugin not configured"
-            echo "💡 Consider adding org.owasp:dependency-check-maven plugin to pom.xml"
-            echo "has-report=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 📊 Generate Vulnerability Report
-        id: generate-report
-        if: steps.dependabot-scan.outputs.medium-plus-vulns > 0 || steps.dependabot-scan.outputs.scan-method == 'fallback-required'
+          with open('./vulnerability_details.json', 'r') as f:
+              data = json.load(f)
+          
+          high_vulns = data['high']
+          medium_vulns = data['medium']
+          low_vulns = data['low']
+          
+          comment = '''🚨 **Dependabot Security Vulnerability Scan Results**
+          
+          **Summary**: Found {total} vulnerabilities ({high} High/Critical, {medium} Medium, {low} Low)
+          
+          '''.format(
+              total=data['total'],
+              high=len(high_vulns),
+              medium=len(medium_vulns),
+              low=len(low_vulns)
+          )
+          
+          if high_vulns:
+              comment += '''**🔴 High/Critical Severity Issues:**
+          '''
+              for vuln in high_vulns:
+                  comment += f'''
+          - **{vuln['dependency']}** - {vuln['vulnerability']['cve_id']}
+            - **Impact**: {vuln['vulnerability']['summary']}
+            - **CVSS Score**: {vuln['vulnerability']['cvss_score']}
+            - **Severity**: {vuln['vulnerability']['severity'].upper()}
+            - **Patched Version**: {vuln['patched_version']}
+            - **Alert**: [View Details](https://github.com/{os.environ['GITHUB_REPOSITORY']}/security/dependabot/{vuln['number']})
+          '''
+          
+          if medium_vulns:
+              comment += '''
+          **🟡 Medium Severity Issues:**
+          '''
+              for vuln in medium_vulns:
+                  comment += f'''
+          - **{vuln['dependency']}** - {vuln['vulnerability']['cve_id']}
+            - **Impact**: {vuln['vulnerability']['summary']}
+            - **CVSS Score**: {vuln['vulnerability']['cvss_score']}
+            - **Patched Version**: {vuln['patched_version']}
+            - **Alert**: [View Details](https://github.com/{os.environ['GITHUB_REPOSITORY']}/security/dependabot/{vuln['number']})
+          '''
+          
+          comment += '''
+          **🔧 Remediation Steps:**
+          1. Review the Dependabot alerts in the Security tab
+          2. Accept Dependabot PRs to update vulnerable dependencies
+          3. Or manually update dependencies: \`mvn versions:use-latest-versions\`
+          4. Test changes thoroughly before merging
+          
+          **📈 Next Steps:**
+          - Address High/Critical issues before merging
+          - Consider updating Medium severity issues
+          - Monitor Dependabot for automatic PRs
+          
+          ---
+          📞 **Need Help?** Contact your Application Security Team for assistance with vulnerability remediation.
+          
+          📊 **View All Alerts**: Check the [Security tab](https://github.com/{os.environ['GITHUB_REPOSITORY']}/security/dependabot) for detailed vulnerability analysis.
+          '''
+          
+          # Write comment to file
+          with open('./pr_comment.md', 'w') as f:
+              f.write(comment)
+          "
+          
+      - name: Comment on PR with vulnerability results
+        if: steps.get-alerts.outputs.total_count > 0
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const scanMethod = '${{ steps.dependabot-scan.outputs.scan-method }}';
-            const scanStatus = '${{ steps.dependabot-scan.outputs.scan-status }}';
+            const fs = require('fs');
+            const comment = fs.readFileSync('./pr_comment.md', 'utf8');
             
-            let report = '';
-            
-            if (scanMethod === 'fallback-required') {
-              // Generate report for fallback scenario
-              report = '⚠️ **Security Scan Status Report**\n\n';
-              report += '**⚠️ Limited Security Scanning Available**\n\n';
-              report += '**Issue**: GitHub Advanced Security is not enabled for this repository.\n\n';
-              report += '**What this means**:\n';
-              report += '- Dependabot vulnerability alerts are not accessible\n';
-              report += '- Advanced security scanning features are unavailable\n';
-              report += '- Limited vulnerability detection capability\n\n';
-              
-              const hasReport = '${{ steps.maven-security-check.outputs.has-report }}' === 'true';
-              if (hasReport) {
-                report += '**✅ Fallback Scan Completed**:\n';
-                report += '- Maven OWASP dependency check executed\n';
-                report += '- Security report generated in `target/dependency-check-report.html`\n';
-                report += '- Check the [Actions summary](../actions) for details\n\n';
-              } else {
-                report += '**⚠️ Fallback Scan Limited**:\n';
-                report += '- OWASP dependency check plugin not properly configured\n';
-                report += '- Manual security review recommended\n\n';
-              }
-              
-              report += '**🔧 Recommended Actions**:\n';
-              report += '1. **Enable GitHub Advanced Security**: Contact your repository administrator\n';
-              report += '2. **Configure OWASP Plugin**: Add `org.owasp:dependency-check-maven` to pom.xml\n';
-              report += '3. **Manual Review**: Check dependencies for known vulnerabilities\n';
-              report += '4. **Regular Updates**: Keep dependencies up to date\n\n';
-              
-              report += '**📋 How to Enable Full Security Scanning**:\n';
-              report += '- For public repositories: GitHub Advanced Security is free\n';
-              report += '- For private repositories: Requires GitHub Enterprise license\n';
-              report += '- Enable in: Repository Settings → Security & analysis → GitHub Advanced Security\n\n';
-              
-              core.setOutput('has-critical-high', 'false');
-            } else {
-              // Generate normal vulnerability report
-              const vulnerabilities = JSON.parse('${{ steps.dependabot-scan.outputs.vulnerabilities }}');
-              
-              report = '🚨 **Security Vulnerability Scan Results**\n\n';
-              
-              // Count vulnerabilities by severity
-              const severityCounts = {
-                critical: 0,
-                high: 0,
-                medium: 0
-              };
-              
-              vulnerabilities.forEach(vuln => {
-                const severity = vuln.security_vulnerability.severity.toLowerCase();
-                if (severityCounts.hasOwnProperty(severity)) {
-                  severityCounts[severity]++;
-                }
-              });
-              
-              report += `**Summary**: Found ${vulnerabilities.length} vulnerabilities (`;
-              const summaryParts = [];
-              if (severityCounts.critical > 0) summaryParts.push(`${severityCounts.critical} Critical`);
-              if (severityCounts.high > 0) summaryParts.push(`${severityCounts.high} High`);
-              if (severityCounts.medium > 0) summaryParts.push(`${severityCounts.medium} Medium`);
-              report += summaryParts.join(', ') + ')\n\n';
-              
-              // Group vulnerabilities by severity
-              const groupedVulns = {
-                critical: [],
-                high: [],
-                medium: []
-              };
-              
-              vulnerabilities.forEach(vuln => {
-                const severity = vuln.security_vulnerability.severity.toLowerCase();
-                if (groupedVulns.hasOwnProperty(severity)) {
-                  groupedVulns[severity].push(vuln);
-                }
-              });
-              
-              // Add Critical/High severity issues
-              if (severityCounts.critical > 0 || severityCounts.high > 0) {
-                report += '**🔴 Critical/High Severity Issues:**\n';
-                [...groupedVulns.critical, ...groupedVulns.high].forEach(vuln => {
-                  const sv = vuln.security_vulnerability;
-                  const pkg = sv.package;
-                  report += `- **${pkg.name}** v${vuln.dependency.package.version} - ${sv.advisory.cve_id || 'No CVE'}\n`;
-                  report += `  - **Impact**: ${sv.advisory.summary}\n`;
-                  report += `  - **CVSS Score**: ${sv.advisory.cvss?.score || 'N/A'}\n`;
-                  report += `  - **Recommendation**: Update to version ${sv.first_patched_version?.identifier || 'latest'}\n\n`;
-                });
-              }
-              
-              // Add Medium severity issues
-              if (severityCounts.medium > 0) {
-                report += '**🟡 Medium Severity Issues:**\n';
-                groupedVulns.medium.forEach(vuln => {
-                  const sv = vuln.security_vulnerability;
-                  const pkg = sv.package;
-                  report += `- **${pkg.name}** v${vuln.dependency.package.version} - ${sv.advisory.cve_id || 'No CVE'}\n`;
-                  report += `  - **Impact**: ${sv.advisory.summary}\n`;
-                  report += `  - **CVSS Score**: ${sv.advisory.cvss?.score || 'N/A'}\n`;
-                  report += `  - **Recommendation**: Update to version ${sv.first_patched_version?.identifier || 'latest'}\n\n`;
-                });
-              }
-              
-              // Add remediation steps
-              report += '**🔧 Remediation Steps:**\n';
-              report += '1. Update dependencies using: `mvn versions:use-latest-versions`\n';
-              report += '2. Review and test changes\n';
-              report += '3. Re-run security scan\n\n';
-              
-              core.setOutput('has-critical-high', (severityCounts.critical + severityCounts.high) > 0 ? 'true' : 'false');
-            }
-            
-            // Add contact information (common for both scenarios)
-            report += '---\n';
-            report += '📞 **Need Help?** Contact your Application Security Team at security@company.com for assistance with vulnerability remediation.';
-            
-            core.setOutput('report', report);
-
-      - name: 💬 Post PR Comment with Findings
-        if: steps.dependabot-scan.outputs.medium-plus-vulns > 0
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const report = `${{ steps.generate-report.outputs.report }}`;
-            
-            // Check if there's already a comment from this workflow
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
-            });
-            
-            const botComment = comments.find(comment => 
-              comment.user.type === 'Bot' && 
-              comment.body.includes('Security Vulnerability Scan Results')
-            );
-            
-            if (botComment) {
-              // Update existing comment
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: report
-              });
-              console.log('Updated existing PR comment');
-            } else {
-              // Create new comment
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: report
-              });
-              console.log('Created new PR comment');
-            }
-
-      - name: 🚨 Set PR Status Check
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const scanMethod = '${{ steps.dependabot-scan.outputs.scan-method }}';
-            const totalVulns = parseInt('${{ steps.dependabot-scan.outputs.medium-plus-vulns }}');
-            const hasCriticalHigh = '${{ steps.generate-report.outputs.has-critical-high }}' === 'true';
-            
-            let state, description;
-            
-            if (scanMethod === 'fallback-required') {
-              // Handle fallback scenario
-              const hasReport = '${{ steps.maven-security-check.outputs.has-report }}' === 'true';
-              if (hasReport) {
-                state = 'success';
-                description = '⚠️ Limited security scan completed - GitHub Advanced Security required for full analysis';
-              } else {
-                state = 'success';
-                description = '⚠️ Basic security check completed - Consider enabling GitHub Advanced Security';
-              }
-            } else if (totalVulns === 0) {
-              state = 'success';
-              description = '✅ No medium+ severity vulnerabilities found';
-            } else if (hasCriticalHigh) {
-              state = 'failure';
-              description = `❌ Found ${totalVulns} vulnerabilities including Critical/High severity issues`;
-            } else {
-              state = 'success';
-              description = `⚠️ Found ${totalVulns} medium severity vulnerabilities - review recommended`;
-            }
-            
-            await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.payload.pull_request.head.sha,
-              state: state,
-              description: description,
-              context: 'Security Scan / Vulnerability Check'
+              body: comment
             });
             
-            console.log(`Set PR status: ${state} - ${description}`);
-
-      - name: 📈 Update Workflow Summary
+      - name: Set PR check status
         if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const highCount = '${{ steps.get-alerts.outputs.high_count || 0 }}';
+            const mediumCount = '${{ steps.get-alerts.outputs.medium_count || 0 }}';
+            const totalCount = '${{ steps.get-alerts.outputs.total_count || 0 }}';
+            
+            let conclusion = 'success';
+            let summary = '✅ No significant security vulnerabilities found';
+            
+            if (parseInt(highCount) > 0) {
+              conclusion = 'failure';
+              summary = `❌ Found ${highCount} High/Critical and ${mediumCount} Medium severity vulnerabilities - Please resolve before merging`;
+            } else if (parseInt(mediumCount) > 0) {
+              conclusion = 'neutral';
+              summary = `⚠️ Found ${mediumCount} Medium severity vulnerabilities - Review recommended`;
+            }
+            
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Dependabot Security Scan',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: 'Dependabot Security Scan',
+                summary: summary,
+                text: totalCount > 0 ? `Total vulnerabilities found: ${totalCount}. Review Dependabot alerts in Security tab.` : 'No vulnerabilities detected by Dependabot'
+              }
+            });
+            
+      - name: Upload vulnerability reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-scan-reports
+          path: |
+            ./vulnerability_details.json
+          retention-days: 30
+          
+      - name: Fail workflow on high severity vulnerabilities
+        if: steps.get-alerts.outputs.high_count > 0
         run: |
-          echo "## 🔍 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Total Vulnerabilities**: ${{ steps.dependabot-scan.outputs.total-vulns }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Medium+ Severity**: ${{ steps.dependabot-scan.outputs.medium-plus-vulns }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: $([ '${{ steps.dependabot-scan.outputs.medium-plus-vulns }}' -gt 0 ] && echo '⚠️ Vulnerabilities Found' || echo '✅ Clean')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📊 Check the PR comment for detailed vulnerability information." >> $GITHUB_STEP_SUMMARY 
+          echo "::error::High or Critical severity vulnerabilities found in Dependabot alerts. Please resolve before merging."
+          exit 1 

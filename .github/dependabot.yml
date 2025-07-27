@@ -34,10 +34,10 @@ updates:
           - "org.apache.shiro*"
           - "com.auth0*"
           - "io.jsonwebtoken*"
-          update-types:
-            - "minor"
-            - "patch"
-            - "security"
+        update-types:
+          - "minor"
+          - "patch"
+          - "security"
       # Spring Framework ecosystem
       spring-framework:
         patterns:
@@ -67,6 +67,37 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "org.springframework.boot*"
         update-types: ["version-update:semver-major"]
+
+  # Maven dependencies - SECURITY-ONLY updates (high frequency)
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "02:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security-patch"
+      - "critical"
+      - "auto-merge-candidate"
+    commit-message:
+      prefix: "security(critical)"
+      include: "scope"
+    assignees:
+      - "IronKnight66"
+    # Only security updates
+    allow:
+      - dependency-type: "direct"
+        update-types: ["security"]
+      - dependency-type: "indirect"
+        update-types: ["security"]
+    groups:
+      critical-security:
+        patterns:
+          - "*"
+        update-types:
+          - "security"
 
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"

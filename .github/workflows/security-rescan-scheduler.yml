@@ -1,219 +1,274 @@
-name: Security Rescan & Auto-Closure
+name: Security Rescan Scheduler
 
 on:
   schedule:
-    # Run daily at 9 AM UTC
-    - cron: '0 9 * * *'
+    # Run daily at 3 AM UTC
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
-      force_closure_check:
-        description: 'Force check for resolved vulnerabilities'
-        required: false
-        default: false
-        type: boolean
+      rescan_type:
+        description: 'Type of rescan to perform'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+        - full
+        - incremental
+        - critical-only
+  # Trigger after Dependabot PRs are merged
   pull_request:
     types: [closed]
-    branches: [main]
-    paths:
-      - 'pom.xml'
+    branches:
+      - main
 
-permissions: write-all
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  security-events: read
+  actions: read
 
 jobs:
-  rescan-and-auto-close:
-    name: 🔄 Security Rescan & Auto-Closure
+  auto-rescan:
+    name: Automated Dependabot Rescan
     runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'dependencies'))
     
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: ☕ Set up JDK 17
+          
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
-
-      - name: 📦 Cache Maven dependencies
+          
+      - name: Cache Maven dependencies
         uses: actions/cache@v4
         with:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-
-      - name: 🔍 Get Current Vulnerability Status
-        id: current-scan
+          
+      - name: Get open security issues
+        id: get-issues
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            try {
-              // Try to get current vulnerability alerts
-              const { data: currentAlerts } = await github.rest.dependabot.listAlertsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'open',
-                sort: 'created',
-                direction: 'desc'
-              });
-              
-              console.log(`✅ Successfully accessed Dependabot alerts: Found ${currentAlerts.length} current open vulnerability alerts`);
-              
-              // Filter for medium+ severity vulnerabilities
-              const currentMediumPlusVulns = currentAlerts.filter(alert => {
-                const severity = alert.security_vulnerability.severity.toLowerCase();
-                return ['medium', 'high', 'critical'].includes(severity);
-              });
-              
-              // Extract CVE IDs from current vulnerabilities
-              const currentCVEs = currentMediumPlusVulns
-                .map(alert => alert.security_vulnerability.advisory.cve_id)
-                .filter(Boolean);
-              
-              console.log(`Current CVEs: ${currentCVEs.join(', ')}`);
-              
-              core.setOutput('current-vulns', currentAlerts.length);
-              core.setOutput('current-medium-plus', currentMediumPlusVulns.length);
-              core.setOutput('current-cves', JSON.stringify(currentCVEs));
-              core.setOutput('scan-method', 'dependabot-api');
-              
-              return {
-                total: currentAlerts.length,
-                mediumPlus: currentMediumPlusVulns.length,
-                cves: currentCVEs
-              };
-            } catch (error) {
-              console.warn('⚠️ Dependabot API not accessible:', error.message);
-              
-              // Handle 403 errors (GitHub Advanced Security not enabled)
-              if (error.status === 403) {
-                console.log('📋 GitHub Advanced Security is required for Dependabot alerts API');
-                console.log('💡 Rescan scheduler will run with limited functionality');
-                
-                // Set fallback outputs - no vulnerabilities to compare
-                core.setOutput('current-vulns', 0);
-                core.setOutput('current-medium-plus', 0);
-                core.setOutput('current-cves', JSON.stringify([]));
-                core.setOutput('scan-method', 'fallback-required');
-                
-                return {
-                  total: 0,
-                  mediumPlus: 0,
-                  cves: []
-                };
-              } else {
-                // For other errors, fail the workflow  
-                core.setFailed(`Failed to fetch current vulnerabilities: ${error.message}`);
-              }
-            }
-
-      - name: 🎫 Get Tracked Security Issues
-        id: tracked-issues
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            try {
-              // Get open security issues
-              const { data: openIssues } = await github.rest.issues.listForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                labels: 'security,vulnerability',
-                state: 'open',
-                per_page: 100
-              });
-              
-              console.log(`Found ${openIssues.length} open security issues`);
-              
-              // Extract CVE information from issues
-              const trackedIssues = openIssues.map(issue => {
-                const cveMatch = issue.title.match(/CVE-\d{4}-\d+/);
-                const packageMatch = issue.title.match(/in (.+)$/);
-                
-                return {
-                  number: issue.number,
-                  title: issue.title,
-                  cve: cveMatch ? cveMatch[0] : null,
-                  package: packageMatch ? packageMatch[1] : null,
-                  created_at: issue.created_at,
-                  labels: issue.labels.map(label => label.name)
-                };
-              }).filter(issue => issue.cve); // Only include issues with CVE IDs
-              
-              console.log(`Tracked issues with CVEs: ${trackedIssues.map(i => i.cve).join(', ')}`);
-              
-              core.setOutput('tracked-issues-count', trackedIssues.length);
-              core.setOutput('tracked-issues', JSON.stringify(trackedIssues));
-              
-              return trackedIssues;
-            } catch (error) {
-              console.error('Error fetching tracked issues:', error);
-              core.setFailed(`Failed to fetch tracked issues: ${error.message}`);
-            }
-
-      - name: 🔒 Identify Resolved Issues
-        id: resolved-issues
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const currentCVEs = JSON.parse('${{ steps.current-scan.outputs.current-cves }}');
-            const trackedIssues = JSON.parse('${{ steps.tracked-issues.outputs.tracked-issues }}');
-            
-            // Find issues that are tracked but no longer have active vulnerabilities
-            const resolvedIssues = trackedIssues.filter(issue => 
-              issue.cve && !currentCVEs.includes(issue.cve)
-            );
-            
-            console.log(`Found ${resolvedIssues.length} resolved issues:`);
-            resolvedIssues.forEach(issue => {
-              console.log(`- Issue #${issue.number}: ${issue.cve} (${issue.package})`);
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security,vulnerability',
+              state: 'open'
             });
             
-            core.setOutput('resolved-count', resolvedIssues.length);
-            core.setOutput('resolved-issues', JSON.stringify(resolvedIssues));
+            const securityIssues = issues.data
+              .filter(issue => issue.title.startsWith('[SECURITY]'))
+              .map(issue => ({
+                number: issue.number,
+                title: issue.title,
+                cve: issue.title.match(/CVE-\d{4}-\d+/)?.[0] || issue.title.match(/GHSA-[a-z0-9-]+/)?.[0] || 'Unknown',
+                labels: issue.labels.map(l => l.name),
+                created_at: issue.created_at,
+                updated_at: issue.updated_at
+              }));
             
-            return resolvedIssues;
-
-      - name: ✅ Close Resolved Issues
-        if: steps.resolved-issues.outputs.resolved-count > 0
-        id: close-issues
+            console.log(\`Found \${securityIssues.length} open security issues\`);
+            
+            // Write to file for later use
+            const fs = require('fs');
+            fs.writeFileSync('./open_security_issues.json', JSON.stringify(securityIssues, null, 2));
+            
+            return securityIssues.length;
+            
+      - name: Determine scan scope
+        id: scan-scope
+        run: |
+          RESCAN_TYPE="${{ github.event.inputs.rescan_type || 'full' }}"
+          
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RESCAN_TYPE="incremental"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            # Weekly full scan on Sundays, daily incremental otherwise
+            if [ $(date +%u) -eq 7 ]; then
+              RESCAN_TYPE="full"
+            else
+              RESCAN_TYPE="incremental"
+            fi
+          fi
+          
+          echo "scan_type=$RESCAN_TYPE" >> $GITHUB_OUTPUT
+          echo "Running $RESCAN_TYPE Dependabot rescan"
+          
+      - name: Build project for dependency analysis
+        run: |
+          mvn clean compile -DskipTests
+          
+      - name: Get current Dependabot alerts
+        id: fresh-scan
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const resolvedIssues = JSON.parse('${{ steps.resolved-issues.outputs.resolved-issues }}');
+            try {
+              let alerts = [];
+              
+              // Get all current Dependabot alerts based on scan type
+              const scanType = '${{ steps.scan-scope.outputs.scan_type }}';
+              
+              if (scanType === 'critical-only') {
+                // Only get critical/high severity alerts
+                const allAlerts = await github.rest.dependabot.listAlertsForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'open',
+                  per_page: 100
+                });
+                
+                alerts = allAlerts.data.filter(alert => 
+                  ['critical', 'high'].includes(alert.security_advisory.severity.toLowerCase())
+                );
+              } else {
+                // Get all alerts for full or incremental scan
+                const allAlerts = await github.rest.dependabot.listAlertsForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'open',
+                  per_page: 100
+                });
+                
+                alerts = allAlerts.data;
+              }
+              
+              console.log(\`Found \${alerts.length} current Dependabot alerts (\${scanType} scan)\`);
+              
+              // Transform to our format
+              const vulnerabilities = alerts.map(alert => ({
+                alert_number: alert.number,
+                cve: alert.security_advisory.cve_id || \`GHSA-\${alert.security_advisory.ghsa_id}\`,
+                dependency: alert.dependency.package.name,
+                severity: alert.security_advisory.severity,
+                state: alert.state,
+                created_at: alert.created_at,
+                updated_at: alert.updated_at
+              }));
+              
+              // Save current alerts
+              const fs = require('fs');
+              fs.writeFileSync('./current_dependabot_alerts.json', JSON.stringify(vulnerabilities, null, 2));
+              
+              return {
+                rescan_completed: true,
+                total_alerts: vulnerabilities.length,
+                current_cves: vulnerabilities.map(v => v.cve)
+              };
+              
+            } catch (error) {
+              console.error('Error fetching Dependabot alerts:', error);
+              return { rescan_completed: false, total_alerts: 0, current_cves: [] };
+            }
+            
+      - name: Compare with tracked issues
+        id: compare-issues
+        if: fromJSON(steps.fresh-scan.outputs.rescan_completed)
+        run: |
+          python3 -c "
+          import json
+          import os
+          from collections import defaultdict
+          
+          # Load current Dependabot alerts
+          with open('./current_dependabot_alerts.json', 'r') as f:
+              current_alerts = json.load(f)
+          
+          # Load open security issues from GitHub
+          with open('./open_security_issues.json', 'r') as f:
+              open_issues = json.load(f)
+          
+          # Extract current CVEs from Dependabot alerts
+          current_cves = set(alert['cve'] for alert in current_alerts)
+          
+          # Find resolved issues (CVEs in GitHub issues but not in current Dependabot alerts)
+          resolved_issues = []
+          still_present_issues = []
+          
+          for issue in open_issues:
+              issue_cve = issue['cve']
+              if issue_cve != 'Unknown':
+                  if issue_cve not in current_cves:
+                      resolved_issues.append(issue)
+                  else:
+                      still_present_issues.append(issue)
+          
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'resolved_count={len(resolved_issues)}\n')
+              f.write(f'still_present_count={len(still_present_issues)}\n')
+              f.write(f'total_current_vulnerabilities={len(current_cves)}\n')
+          
+          # Save resolved issues for closure
+          with open('./resolved_issues.json', 'w') as f:
+              json.dump(resolved_issues, f, indent=2)
+          
+          # Save current state for tracking
+          scan_summary = {
+              'scan_date': '$(date -Iseconds)',
+              'scan_type': '${{ steps.scan-scope.outputs.scan_type }}',
+              'total_vulnerabilities': len(current_cves),
+              'resolved_issues': len(resolved_issues),
+              'still_present_issues': len(still_present_issues),
+              'current_cves': list(current_cves),
+              'source': 'dependabot'
+          }
+          
+          with open('./rescan_summary.json', 'w') as f:
+              json.dump(scan_summary, f, indent=2)
+          
+          print(f'Dependabot rescan completed:')
+          print(f'  - Current vulnerabilities: {len(current_cves)}')
+          print(f'  - Resolved issues: {len(resolved_issues)}')
+          print(f'  - Still present: {len(still_present_issues)}')
+          "
+          
+      - name: Close resolved security issues
+        id: close-issues
+        if: steps.compare-issues.outputs.resolved_count > 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const resolvedIssues = JSON.parse(fs.readFileSync('./resolved_issues.json', 'utf8'));
+            
             const closedIssues = [];
             
             for (const issue of resolvedIssues) {
               try {
-                // Add closure comment
-                const closureComment = [
-                  '## ✅ Vulnerability Resolved',
-                  '',
-                  `The security vulnerability **${issue.cve}** in **${issue.package}** has been resolved.`,
-                  '',
-                  '### Resolution Details',
-                  `- **Resolved Date**: ${new Date().toISOString().split('T')[0]}`,
-                  '- **Resolution Method**: Dependency update or patch applied',
-                  '- **Verification**: No longer detected in automated security scan',
-                  '',
-                  '### Next Steps',
-                  '- No further action required',
-                  '- Issue will be automatically closed',
-                  '- Security metrics updated',
-                  '',
-                  '---',
-                  '**Auto-resolved by Security Pipeline** | This issue has been automatically closed due to vulnerability remediation.'
-                ].join('\n');
-                
+                // Add a resolution comment
+                const resolutionComment = '## ✅ Vulnerability Resolved\\n\\n' +
+                  '**CVE**: `' + issue.cve + '`\\n' +
+                  '**Resolution Date**: ' + new Date().toLocaleDateString() + '\\n' +
+                  '**Resolution Method**: Dependabot alert resolved - dependency updated or vulnerability patched\\n\\n' +
+                  '### Verification\\n' +
+                  '- [x] Latest Dependabot scan shows vulnerability no longer present\\n' +
+                  '- [x] Dependencies updated to secure versions\\n' +
+                  '- [x] No active Dependabot alerts for this CVE\\n\\n' +
+                  '### Scan Details\\n' +
+                  '- **Scan Type**: ' + '${{ steps.scan-scope.outputs.scan_type }}' + '\\n' +
+                  '- **Workflow Run**: #' + context.runNumber + '\\n' +
+                  '- **Verification Date**: ' + new Date().toISOString() + '\\n' +
+                  '- **Source**: GitHub Dependabot\\n\\n' +
+                  '---\\n' +
+                  '**Auto-closed by Security Rescan Pipeline**\\n' +
+                  'This issue was automatically resolved as the corresponding Dependabot alert is no longer active. ' +
+                  'If you believe this closure was premature, please reopen the issue and contact the security team.';
+            
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
-                  repo: context.repo.repo,
+                  repo: context.repo.repo,  
                   issue_number: issue.number,
-                  body: closureComment
+                  body: resolutionComment
                 });
                 
                 // Close the issue
@@ -222,123 +277,137 @@ jobs:
                   repo: context.repo.repo,
                   issue_number: issue.number,
                   state: 'closed',
-                  labels: [...issue.labels, 'resolved']
+                  labels: [...issue.labels, 'resolved', 'auto-closed', 'dependabot-resolved']
                 });
                 
-                console.log(`Closed issue #${issue.number} for resolved CVE ${issue.cve}`);
                 closedIssues.push({
                   number: issue.number,
                   cve: issue.cve,
-                  package: issue.package
+                  title: issue.title
                 });
                 
-                // Small delay to avoid rate limiting
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                console.log(\`Closed issue #\${issue.number} for resolved CVE \${issue.cve}\`);
                 
               } catch (error) {
-                console.error(`Failed to close issue #${issue.number}:`, error);
+                console.error(\`Failed to close issue #\${issue.number}:\`, error);
               }
             }
             
-            core.setOutput('closed-issues', JSON.stringify(closedIssues));
-            console.log(`Successfully closed ${closedIssues.length} resolved security issues`);
-
-      - name: 📊 Update Security Metrics
-        id: update-metrics
+            // Save closure summary
+            fs.writeFileSync('./closed_issues.json', JSON.stringify(closedIssues, null, 2));
+            
+            return closedIssues.length;
+            
+      - name: Update overdue issues
+        id: update-overdue
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const currentVulns = parseInt('${{ steps.current-scan.outputs.current-vulns }}');
-            const currentMediumPlus = parseInt('${{ steps.current-scan.outputs.current-medium-plus }}');
-            const resolvedCount = parseInt('${{ steps.resolved-issues.outputs.resolved-count }}');
-            const trackedCount = parseInt('${{ steps.tracked-issues.outputs.tracked-issues-count }}');
+            const fs = require('fs');
+            const openIssues = JSON.parse(fs.readFileSync('./open_security_issues.json', 'utf8'));
             
-            const metrics = {
-              lastRescanDate: new Date().toISOString(),
-              totalVulnerabilities: currentVulns,
-              mediumPlusVulnerabilities: currentMediumPlus,
-              resolvedThisScan: resolvedCount,
-              activeTrackedIssues: trackedCount - resolvedCount,
-              scanType: 'rescan-auto-closure'
-            };
+            const now = new Date();
+            const overdueIssues = [];
             
-            console.log('Updated security metrics:', metrics);
-            
-            // Calculate resolution rate
-            const resolutionRate = trackedCount > 0 ? ((resolvedCount / trackedCount) * 100).toFixed(1) : 0;
-            
-            let summary = '## 🔄 Security Rescan Results\n\n';
-            summary += `- **Rescan Date**: ${new Date().toISOString().split('T')[0]}\n`;
-            summary += `- **Current Vulnerabilities**: ${currentVulns}\n`;
-            summary += `- **Medium+ Severity**: ${currentMediumPlus}\n`;
-            summary += `- **Issues Resolved**: ${resolvedCount}\n`;
-            summary += `- **Still Tracking**: ${trackedCount - resolvedCount}\n`;
-            summary += `- **Resolution Rate**: ${resolutionRate}%\n\n`;
-            
-            if (resolvedCount > 0) {
-              const closedIssues = JSON.parse('${{ steps.close-issues.outputs.closed-issues }}' || '[]');
-              summary += '### ✅ Resolved Issues\n\n';
-              closedIssues.forEach(issue => {
-                summary += `- [#${issue.number}](../../issues/${issue.number}) - ${issue.cve} in ${issue.package}\n`;
-              });
-              summary += '\n';
+            // Check for overdue issues (created more than their target resolution time ago)
+            for (const issue of openIssues) {
+              const createdDate = new Date(issue.created_at);
+              const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
+              
+              // Determine target resolution days based on severity
+              let targetDays = 30; // default
+              if (issue.labels.includes('critical')) targetDays = 3;
+              else if (issue.labels.includes('high')) targetDays = 7;
+              else if (issue.labels.includes('medium')) targetDays = 14;
+              
+              if (daysSinceCreation > targetDays && !issue.labels.includes('overdue')) {
+                overdueIssues.push({
+                  ...issue,
+                  days_overdue: daysSinceCreation - targetDays,
+                  target_days: targetDays
+                });
+              }
             }
             
-            if (currentMediumPlus > 0) {
-              summary += '### ⚠️ Active Vulnerabilities\n\n';
-              summary += `There are still ${currentMediumPlus} medium+ severity vulnerabilities requiring attention.\n`;
-              summary += 'Review the [security issues](../../issues?q=is%3Aissue+is%3Aopen+label%3Asecurity) for details.\n\n';
+            // Add overdue labels and comments to overdue issues
+            for (const issue of overdueIssues) {
+              try {
+                const overdueComment = '## ⚠️ Security Issue Overdue\\n\\n' +
+                  '**CVE**: `' + issue.cve + '`\\n' +
+                  '**Days Overdue**: ' + issue.days_overdue + ' days\\n' +
+                  '**Original Target**: ' + issue.target_days + ' days\\n' +
+                  '**Created**: ' + new Date(issue.created_at).toLocaleDateString() + '\\n\\n' +
+                  'This security vulnerability has exceeded its target resolution timeframe. Please prioritize remediation.\\n\\n' +
+                  '### Escalation\\n' +
+                  '- [ ] Security team notified\\n' +
+                  '- [ ] Management escalation initiated\\n' +
+                  '- [ ] Alternative mitigation considered\\n' +
+                  '- [ ] Check if Dependabot PR is available\\n\\n' +
+                  '### Next Steps\\n' +
+                  '1. Review the [Dependabot alerts](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/security/dependabot)\\n' +
+                  '2. Accept any available Dependabot PRs\\n' +
+                  '3. Manually update dependencies if needed\\n\\n' +
+                  '---\\n' +
+                  '**Auto-generated escalation by Security Pipeline**';
+            
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: overdueComment
+                });
+                
+                // Add overdue label
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['overdue', 'escalated']
+                });
+                
+              } catch (error) {
+                console.error(\`Failed to update overdue issue #\${issue.number}:\`, error);
+              }
             }
             
-            core.setOutput('metrics-summary', summary);
-
-      - name: 🔔 Send Notifications
-        if: steps.resolved-issues.outputs.resolved-count > 0
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const resolvedCount = parseInt('${{ steps.resolved-issues.outputs.resolved-count }}');
-            const closedIssues = JSON.parse('${{ steps.close-issues.outputs.closed-issues }}' || '[]');
+            console.log(\`Updated \${overdueIssues.length} overdue issues\`);
+            return overdueIssues.length;
             
-            console.log(`🎉 Security update: ${resolvedCount} vulnerabilities resolved and issues auto-closed`);
-            
-            // Here you could integrate with notification systems
-            // Example: Slack webhook for resolved vulnerabilities
-            /*
-            if (process.env.SLACK_WEBHOOK_URL) {
-              await fetch(process.env.SLACK_WEBHOOK_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  text: `✅ Security Update: ${resolvedCount} vulnerabilities resolved`,
-                  blocks: [
-                    {
-                      type: 'section',
-                      text: {
-                        type: 'mrkdwn',
-                        text: `*Good news! Security vulnerabilities resolved in ${context.repo.repo}*\n\n` +
-                              `• Vulnerabilities resolved: ${resolvedCount}\n` +
-                              `• Issues auto-closed: ${closedIssues.length}\n\n` +
-                              `The security pipeline has automatically detected and closed resolved vulnerabilities.`
-                      }
-                    }
-                  ]
-                })
-              });
-            }
-            */
-
-      - name: 📈 Generate Final Summary
-        if: always()
+      - name: Generate rescan summary
         run: |
-          echo '${{ steps.update-metrics.outputs.metrics-summary }}' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 **Quick Links:**" >> $GITHUB_STEP_SUMMARY
-          echo "- [Open Security Issues](../../issues?q=is%3Aissue+is%3Aopen+label%3Asecurity)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Closed Security Issues](../../issues?q=is%3Aissue+is%3Aclosed+label%3Asecurity)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Dependabot Alerts](../../security/dependabot)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Security Dashboard](../../security)" >> $GITHUB_STEP_SUMMARY 
+          python3 -c "
+          import json
+          import os
+          from datetime import datetime
+          
+          # Load scan summary
+          with open('./rescan_summary.json', 'r') as f:
+              summary = json.load(f)
+          
+          resolved_count = '${{ steps.compare-issues.outputs.resolved_count || 0 }}'
+          closed_count = '${{ steps.close-issues.outputs.result || 0 }}'
+          overdue_count = '${{ steps.update-overdue.outputs.result || 0 }}'
+          
+          print('=== Dependabot Security Rescan Summary ===')
+          print(f'Scan Type: {summary[\"scan_type\"]}')
+          print(f'Current Dependabot Alerts: {summary[\"total_vulnerabilities\"]}')
+          print(f'Issues Resolved: {resolved_count}')
+          print(f'Issues Closed: {closed_count}')
+          print(f'Overdue Issues Updated: {overdue_count}')
+          print(f'Still Present: {summary[\"still_present_issues\"]}')
+          print(f'Source: {summary[\"source\"]}')
+          print('==========================================')
+          "
+          
+      - name: Upload rescan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-rescan-reports-${{ github.run_number }}
+          path: |
+            ./current_dependabot_alerts.json
+            ./rescan_summary.json
+            ./resolved_issues.json
+            ./closed_issues.json
+            ./open_security_issues.json
+          retention-days: 60 

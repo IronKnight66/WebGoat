@@ -2,316 +2,594 @@ name: Security Metrics Dashboard
 
 on:
   schedule:
-    # Run weekly on Mondays at 10 AM UTC
-    - cron: '0 10 * * 1'
+    # Generate weekly reports on Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
   workflow_dispatch:
     inputs:
-      generate_report:
-        description: 'Generate comprehensive security report'
+      report_type:
+        description: 'Type of report to generate'
+        required: true
+        default: 'comprehensive'
+        type: choice
+        options:
+        - comprehensive
+        - summary
+        - trends
+        - compliance
+      time_period:
+        description: 'Time period for analysis (days)'
         required: false
-        default: true
-        type: boolean
+        default: '30'
+        type: string
 
 permissions:
   contents: read
   issues: read
   pull-requests: read
-  security-events: write
+  security-events: read
   actions: read
 
 jobs:
-  security-metrics:
-    name: 📊 Security Metrics Collection
+  generate-dashboard:
+    name: Security Metrics Analysis
     runs-on: ubuntu-latest
     
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: 📊 Collect Security Metrics
+        with:
+          fetch-depth: 0
+          
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          # Remove OWASP-related dependencies and update to use Dependabot alerts
+          pip install requests matplotlib seaborn pandas python-dateutil
+          
+      - name: Collect security metrics data
         id: collect-metrics
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const startTime = Date.now();
+            const fs = require('fs');
+            const timePeriodDays = parseInt('${{ github.event.inputs.time_period || 30 }}');
+            const cutoffDate = new Date(Date.now() - (timePeriodDays * 24 * 60 * 60 * 1000));
             
+            // Collect security issues data
+            const securityIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security',
+              state: 'all',
+              since: cutoffDate.toISOString(),
+              per_page: 100
+            });
+            
+            // Collect vulnerability issues specifically
+            const vulnIssues = securityIssues.data.filter(issue => 
+              issue.title.startsWith('[SECURITY]') && 
+              issue.labels.some(label => label.name === 'vulnerability')
+            );
+            
+            // Get current Dependabot alerts for additional context
+            let dependabotAlerts = [];
             try {
-              let alerts = [];
-              let dependabotAvailable = true;
-              
-              // Try to get vulnerability alerts
-              try {
-                const { data: alertsData } = await github.rest.dependabot.listAlertsForRepo({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  state: 'open',
-                  per_page: 100
-                });
-                alerts = alertsData;
-                console.log(`✅ Successfully accessed Dependabot alerts: Found ${alerts.length} vulnerability alerts`);
-              } catch (alertError) {
-                if (alertError.status === 403) {
-                  console.warn('⚠️ Dependabot API not accessible - GitHub Advanced Security not enabled');
-                  dependabotAvailable = false;
-                  alerts = [];
-                } else {
-                  throw alertError; // Re-throw other errors
-                }
-              }
-              
-              // Get security issues (this should work regardless of Advanced Security)
-              const { data: securityIssues } = await github.rest.issues.listForRepo({
+              const alerts = await github.rest.dependabot.listAlertsForRepo({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                labels: 'security,vulnerability',
-                state: 'all',
+                state: 'open',
                 per_page: 100
               });
-              
-              // Get closed security issues from last 30 days
-              const thirtyDaysAgo = new Date();
-              thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-              
-              const recentClosedIssues = securityIssues.filter(issue => 
-                issue.state === 'closed' && 
-                new Date(issue.closed_at) > thirtyDaysAgo
-              );
-              
-              // Calculate severity distribution (only if Dependabot is available)
-              const severityCount = {
-                critical: 0,
-                high: 0,
-                medium: 0,
-                low: 0
-              };
-              
-              if (dependabotAvailable) {
-                alerts.forEach(alert => {
-                  const severity = alert.security_vulnerability.severity.toLowerCase();
-                  if (severityCount.hasOwnProperty(severity)) {
-                    severityCount[severity]++;
-                  }
-                });
-              }
-              
-              // Calculate MTTD (Mean Time to Detection) - only if Dependabot is available
-              const averageDetectionTime = dependabotAvailable && alerts.length > 0 ? 
-                alerts.reduce((sum, alert) => {
-                  const createdDate = new Date(alert.created_at);
-                  const now = new Date();
-                  return sum + (now - createdDate);
-                }, 0) / alerts.length / (1000 * 60 * 60 * 24) : 0; // Convert to days
-              
-              // Calculate MTTR (Mean Time to Resolution)
-              const averageResolutionTime = recentClosedIssues.length > 0 ?
-                recentClosedIssues.reduce((sum, issue) => {
-                  const createdDate = new Date(issue.created_at);
-                  const closedDate = new Date(issue.closed_at);
-                  return sum + (closedDate - createdDate);
-                }, 0) / recentClosedIssues.length / (1000 * 60 * 60 * 24) : 0; // Convert to days
-              
-              const metrics = {
-                collectionDate: new Date().toISOString(),
-                dependabotAvailable: dependabotAvailable,
-                totalVulnerabilities: alerts.length,
-                mediumPlusVulnerabilities: severityCount.critical + severityCount.high + severityCount.medium,
-                severityDistribution: severityCount,
-                openSecurityIssues: securityIssues.filter(i => i.state === 'open').length,
-                closedSecurityIssues: securityIssues.filter(i => i.state === 'closed').length,
-                recentlyClosedIssues: recentClosedIssues.length,
-                meanTimeToDetection: Math.round(averageDetectionTime * 10) / 10,
-                meanTimeToResolution: Math.round(averageResolutionTime * 10) / 10,
-                autoClosureRate: securityIssues.length > 0 ? 
-                  Math.round((recentClosedIssues.filter(i => i.labels.some(l => l.name === 'resolved')).length / recentClosedIssues.length) * 100) : 0
-              };
-              
-              core.setOutput('metrics', JSON.stringify(metrics));
-              console.log('Collected security metrics:', metrics);
-              
-              return metrics;
+              dependabotAlerts = alerts.data;
             } catch (error) {
-              console.error('Error collecting metrics:', error);
-              core.setFailed(`Failed to collect metrics: ${error.message}`);
+              console.log('Could not fetch Dependabot alerts:', error.message);
             }
-
-      - name: 📈 Generate Security Report
-        id: generate-report
+            
+            // Categorize by severity and status
+            const metrics = {
+              total_security_issues: vulnIssues.length,
+              open_issues: vulnIssues.filter(issue => issue.state === 'open').length,
+              closed_issues: vulnIssues.filter(issue => issue.state === 'closed').length,
+              current_dependabot_alerts: dependabotAlerts.length,
+              by_severity: {
+                critical: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'critical')).length,
+                high: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'high')).length,
+                medium: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'medium')).length,
+                low: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'low')).length
+              },
+              dependabot_by_severity: {
+                critical: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'critical').length,
+                high: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'high').length,
+                medium: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'medium').length,
+                low: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'low').length
+              },
+              by_status: {
+                open_critical: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'critical')
+                ).length,
+                open_high: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'high')
+                ).length,
+                open_medium: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'medium')
+                ).length,
+                overdue: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'overdue')
+                ).length
+              },
+              resolution_times: []
+            };
+            
+            // Calculate resolution times for closed issues
+            for (const issue of vulnIssues.filter(i => i.state === 'closed')) {
+              const created = new Date(issue.created_at);
+              const closed = new Date(issue.closed_at);
+              const resolutionHours = (closed - created) / (1000 * 60 * 60);
+              
+              metrics.resolution_times.push({
+                issue_number: issue.number,
+                cve: issue.title.match(/CVE-\d{4}-\d+/)?.[0] || issue.title.match(/GHSA-[a-z0-9-]+/)?.[0] || 'Unknown',
+                severity: issue.labels.find(l => ['critical', 'high', 'medium', 'low'].includes(l.name))?.name || 'unknown',
+                resolution_hours: Math.round(resolutionHours),
+                resolution_days: Math.round(resolutionHours / 24)
+              });
+            }
+            
+            // Calculate MTTR (Mean Time To Resolution)
+            if (metrics.resolution_times.length > 0) {
+              const totalHours = metrics.resolution_times.reduce((sum, item) => sum + item.resolution_hours, 0);
+              metrics.mttr_hours = Math.round(totalHours / metrics.resolution_times.length);
+              metrics.mttr_days = Math.round(metrics.mttr_hours / 24);
+            } else {
+              metrics.mttr_hours = 0;
+              metrics.mttr_days = 0;
+            }
+            
+            // Get workflow run data for MTTD calculation
+            const workflowRuns = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              created: `>=${cutoffDate.toISOString().split('T')[0]}`,
+              per_page: 100
+            });
+            
+            const securityWorkflowRuns = workflowRuns.data.workflow_runs.filter(run => 
+              run.name.includes('Security') || run.name.includes('security') || run.name.includes('Dependabot')
+            );
+            
+            metrics.workflow_stats = {
+              total_security_scans: securityWorkflowRuns.length,
+              successful_scans: securityWorkflowRuns.filter(run => run.conclusion === 'success').length,
+              failed_scans: securityWorkflowRuns.filter(run => run.conclusion === 'failure').length,
+              scan_frequency: securityWorkflowRuns.length / timePeriodDays
+            };
+            
+            // Add Dependabot-specific metrics
+            metrics.dependabot_stats = {
+              total_alerts: dependabotAlerts.length,
+              ecosystem_breakdown: {},
+              age_distribution: []
+            };
+            
+            // Analyze Dependabot alerts by ecosystem
+            for (const alert of dependabotAlerts) {
+              const ecosystem = alert.dependency.package.ecosystem;
+              metrics.dependabot_stats.ecosystem_breakdown[ecosystem] = 
+                (metrics.dependabot_stats.ecosystem_breakdown[ecosystem] || 0) + 1;
+              
+              // Calculate alert age
+              const ageInDays = Math.floor((Date.now() - new Date(alert.created_at)) / (1000 * 60 * 60 * 24));
+              metrics.dependabot_stats.age_distribution.push(ageInDays);
+            }
+            
+            // Save metrics data
+            fs.writeFileSync('./security_metrics.json', JSON.stringify(metrics, null, 2));
+            
+            console.log(`Collected metrics for ${timePeriodDays} days:`);
+            console.log(`- Total security issues: ${metrics.total_security_issues}`);
+            console.log(`- Open issues: ${metrics.open_issues}`);
+            console.log(`- Current Dependabot alerts: ${metrics.current_dependabot_alerts}`);
+            console.log(`- MTTR: ${metrics.mttr_days} days`);
+            
+            return metrics;
+            
+      - name: Generate security trend analysis
+        id: trend-analysis
+        run: |
+          python3 -c "
+          import json
+          import matplotlib.pyplot as plt
+          import seaborn as sns
+          import pandas as pd
+          from datetime import datetime, timedelta
+          import os
+          
+          # Load metrics data
+          with open('./security_metrics.json', 'r') as f:
+              metrics = json.load(f)
+          
+          # Set style for better looking charts
+          plt.style.use('seaborn-v0_8')
+          sns.set_palette('husl')
+          
+          # Create dashboard figures
+          fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+          fig.suptitle('WebGoat Security Metrics Dashboard', fontsize=20, fontweight='bold')
+          
+          # 1. Security Issues by Severity (Pie Chart)
+          severity_data = metrics['by_severity']
+          severity_labels = []
+          severity_values = []
+          severity_colors = {'critical': '#FF4444', 'high': '#FF8800', 'medium': '#FFCC00', 'low': '#44AA44'}
+          
+          for severity, count in severity_data.items():
+              if count > 0:
+                  severity_labels.append(f'{severity.title()} ({count})')
+                  severity_values.append(count)
+          
+          if severity_values:
+              ax1.pie(severity_values, labels=severity_labels, autopct='%1.1f%%', startangle=90)
+          else:
+              ax1.text(0.5, 0.5, 'No vulnerabilities found', ha='center', va='center', transform=ax1.transAxes)
+          ax1.set_title('Vulnerabilities by Severity', fontweight='bold')
+          
+          # 2. Open vs Closed Issues (Bar Chart)
+          status_labels = ['Open', 'Closed']
+          status_values = [metrics['open_issues'], metrics['closed_issues']]
+          colors = ['#FF6B6B', '#4ECDC4']
+          
+          bars = ax2.bar(status_labels, status_values, color=colors)
+          ax2.set_title('Issue Status Overview', fontweight='bold')
+          ax2.set_ylabel('Number of Issues')
+          
+          # Add value labels on bars
+          for bar in bars:
+              height = bar.get_height()
+              ax2.text(bar.get_x() + bar.get_width()/2., height,
+                      f'{int(height)}', ha='center', va='bottom')
+          
+          # 3. Resolution Time Distribution
+          if metrics['resolution_times']:
+              resolution_days = [item['resolution_days'] for item in metrics['resolution_times']]
+              ax3.hist(resolution_days, bins=10, color='skyblue', edgecolor='black', alpha=0.7)
+              ax3.axvline(metrics['mttr_days'], color='red', linestyle='--', 
+                         label=f'MTTR: {metrics[\"mttr_days\"]} days')
+              ax3.set_xlabel('Resolution Time (Days)')
+              ax3.set_ylabel('Number of Issues')
+              ax3.set_title('Resolution Time Distribution', fontweight='bold')
+              ax3.legend()
+          else:
+              ax3.text(0.5, 0.5, 'No resolution data available', ha='center', va='center', transform=ax3.transAxes)
+              ax3.set_title('Resolution Time Distribution', fontweight='bold')
+          
+          # 4. Security Scan Success Rate
+          workflow_stats = metrics['workflow_stats']
+          total_scans = workflow_stats['total_security_scans']
+          
+          if total_scans > 0:
+              success_rate = (workflow_stats['successful_scans'] / total_scans) * 100
+              
+              # Create a gauge-like visualization
+              categories = ['Successful', 'Failed']
+              values = [workflow_stats['successful_scans'], workflow_stats['failed_scans']]
+              colors = ['#2ECC71', '#E74C3C']
+              
+              wedges, texts, autotexts = ax4.pie(values, labels=categories, autopct='%1.1f%%', 
+                                               colors=colors, startangle=90)
+              
+              # Add success rate in the center
+              ax4.text(0, 0, f'{success_rate:.1f}%\nSuccess Rate', 
+                      ha='center', va='center', fontsize=14, fontweight='bold')
+          else:
+              ax4.text(0.5, 0.5, 'No scan data available', ha='center', va='center', transform=ax4.transAxes)
+              
+          ax4.set_title('Security Scan Success Rate', fontweight='bold')
+          
+          plt.tight_layout()
+          plt.savefig('./security_dashboard.png', dpi=300, bbox_inches='tight')
+          plt.close()
+          
+          # Generate summary statistics
+          summary_stats = {
+              'generated_at': datetime.now().isoformat(),
+              'period_days': ${{ github.event.inputs.time_period || 30 }},
+              'total_vulnerabilities': metrics['total_security_issues'],
+              'open_vulnerabilities': metrics['open_issues'],
+              'critical_open': metrics['by_status']['open_critical'],
+              'high_open': metrics['by_status']['open_high'],
+              'overdue_issues': metrics['by_status']['overdue'],
+              'mttr_days': metrics['mttr_days'],
+              'scan_success_rate': round((workflow_stats['successful_scans'] / max(workflow_stats['total_security_scans'], 1)) * 100, 1),
+              'avg_scans_per_day': round(workflow_stats['scan_frequency'], 2)
+          }
+          
+          with open('./dashboard_summary.json', 'w') as f:
+              json.dump(summary_stats, f, indent=2)
+          
+          print('Dashboard generated successfully!')
+          print(f'Total vulnerabilities in last {summary_stats[\"period_days\"]} days: {summary_stats[\"total_vulnerabilities\"]}')
+          print(f'Currently open: {summary_stats[\"open_vulnerabilities\"]}')
+          print(f'Mean Time to Resolution: {summary_stats[\"mttr_days\"]} days')
+          "
+          
+      - name: Generate compliance report
+        if: github.event.inputs.report_type == 'compliance' || github.event.inputs.report_type == 'comprehensive'
+        run: |
+          python3 -c "
+          import json
+          from datetime import datetime
+          
+          # Load metrics
+          with open('./security_metrics.json', 'r') as f:
+              metrics = json.load(f)
+          
+          with open('./dashboard_summary.json', 'r') as f:
+              summary = json.load(f)
+          
+          # Define compliance thresholds
+          compliance_criteria = {
+              'critical_resolution_sla': 3,  # days
+              'high_resolution_sla': 7,      # days
+              'medium_resolution_sla': 30,   # days
+              'max_overdue_issues': 0,
+              'min_scan_success_rate': 95.0  # percentage
+          }
+          
+          # Check compliance
+          compliance_status = {
+              'overall_compliant': True,
+              'critical_sla_met': summary['mttr_days'] <= compliance_criteria['critical_resolution_sla'] if summary['mttr_days'] > 0 else True,
+              'no_overdue_issues': summary['overdue_issues'] <= compliance_criteria['max_overdue_issues'],
+              'scan_reliability': summary['scan_success_rate'] >= compliance_criteria['min_scan_success_rate'],
+              'open_critical_count': summary['critical_open'],
+              'open_high_count': summary['high_open']
+          }
+          
+          # Determine overall compliance
+          compliance_status['overall_compliant'] = all([
+              compliance_status['critical_sla_met'],
+              compliance_status['no_overdue_issues'],
+              compliance_status['scan_reliability'],
+              compliance_status['open_critical_count'] == 0  # No open critical issues
+          ])
+          
+          # Generate compliance report
+          report = f'''# Security Compliance Report
+          
+          **Report Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}  
+          **Period**: Last {summary['period_days']} days  
+          **Overall Status**: {'✅ COMPLIANT' if compliance_status['overall_compliant'] else '❌ NON-COMPLIANT'}
+          
+          ## Compliance Criteria
+          
+          | Criteria | Target | Current | Status |
+          |----------|---------|---------|--------|
+          | Critical Issue Resolution | ≤ {compliance_criteria['critical_resolution_sla']} days | {summary['mttr_days']} days | {'✅' if compliance_status['critical_sla_met'] else '❌'} |
+          | Overdue Issues | {compliance_criteria['max_overdue_issues']} | {summary['overdue_issues']} | {'✅' if compliance_status['no_overdue_issues'] else '❌'} |
+          | Scan Success Rate | ≥ {compliance_criteria['min_scan_success_rate']}% | {summary['scan_success_rate']}% | {'✅' if compliance_status['scan_reliability'] else '❌'} |
+          | Open Critical Issues | 0 | {summary['critical_open']} | {'✅ ' if compliance_status['open_critical_count'] == 0 else '❌'} |
+          
+          ## Key Metrics
+          
+          - **Total Vulnerabilities Found**: {summary['total_vulnerabilities']}
+          - **Currently Open**: {summary['open_vulnerabilities']}
+          - **High Priority Open**: {summary['high_open']}
+          - **Average Scans per Day**: {summary['avg_scans_per_day']}
+          
+          ## Recommendations
+          
+          '''
+          
+          if not compliance_status['overall_compliant']:
+              report += '### Immediate Actions Required:\\n\\n'
+              if not compliance_status['critical_sla_met']:
+                  report += '- 🚨 **Improve critical issue resolution time** - Current MTTR exceeds SLA\\n'
+              if not compliance_status['no_overdue_issues']:
+                  report += f'- 🚨 **Address {summary[\"overdue_issues\"]} overdue security issues**\\n'
+              if not compliance_status['scan_reliability']:
+                  report += '- 🚨 **Improve scan reliability** - Success rate below threshold\\n'
+              if compliance_status['open_critical_count'] > 0:
+                  report += f'- 🚨 **Resolve {summary[\"critical_open\"]} open critical vulnerabilities immediately**\\n'
+          else:
+              report += '### Status: All compliance criteria met ✅\\n\\n'
+              report += 'Continue monitoring and maintain current security practices.\\n'
+          
+          report += f'''
+          
+          ---
+          *Report generated by WebGoat Security Pipeline*
+          '''
+          
+          with open('./compliance_report.md', 'w') as f:
+              f.write(report)
+          
+          with open('./compliance_status.json', 'w') as f:
+              json.dump(compliance_status, f, indent=2)
+          
+          print('Compliance report generated')
+          print(f'Overall compliance: {compliance_status[\"overall_compliant\"]}')
+          "
+          
+      - name: Create GitHub Issue for non-compliance
+        if: github.event.inputs.report_type == 'compliance' && hashFiles('./compliance_status.json') != ''
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const metrics = JSON.parse('${{ steps.collect-metrics.outputs.metrics }}');
+            const fs = require('fs');
             
-            // Generate comprehensive report
-            let report = '# 🔒 Security Metrics Dashboard\n\n';
-            report += `**Report Generated**: ${new Date().toISOString().split('T')[0]}\n\n`;
-            
-            // Executive Summary
-            report += '## 📋 Executive Summary\n\n';
-            const securityStatus = metrics.mediumPlusVulnerabilities === 0 ? '🟢 GOOD' : 
-                                  metrics.mediumPlusVulnerabilities <= 5 ? '🟡 MODERATE' : '🔴 CRITICAL';
-            report += `**Overall Security Status**: ${securityStatus}\n\n`;
-            
-            // Key Metrics
-            report += '## 📊 Key Metrics\n\n';
-            report += '| Metric | Value | Status |\n';
-            report += '|--------|--------|--------|\n';
-            report += `| Total Vulnerabilities | ${metrics.totalVulnerabilities} | ${metrics.totalVulnerabilities === 0 ? '✅' : '⚠️'} |\n`;
-            report += `| Medium+ Severity | ${metrics.mediumPlusVulnerabilities} | ${metrics.mediumPlusVulnerabilities === 0 ? '✅' : '🚨'} |\n`;
-            report += `| Open Issues | ${metrics.openSecurityIssues} | ${metrics.openSecurityIssues === 0 ? '✅' : '📋'} |\n`;
-            report += `| Mean Time to Resolution | ${metrics.meanTimeToResolution} days | ${metrics.meanTimeToResolution <= 14 ? '✅' : '⏰'} |\n`;
-            report += `| Auto-Closure Rate | ${metrics.autoClosureRate}% | ${metrics.autoClosureRate >= 80 ? '✅' : '🔧'} |\n\n`;
-            
-            // Severity Breakdown
-            report += '## 🎯 Vulnerability Severity Breakdown\n\n';
-            report += '```\n';
-            report += `Critical: ${metrics.severityDistribution.critical.toString().padStart(3)} 🔴\n`;
-            report += `High:     ${metrics.severityDistribution.high.toString().padStart(3)} 🟠\n`;
-            report += `Medium:   ${metrics.severityDistribution.medium.toString().padStart(3)} 🟡\n`;
-            report += `Low:      ${metrics.severityDistribution.low.toString().padStart(3)} 🟢\n`;
-            report += '```\n\n';
-            
-            // Trends and Analysis
-            report += '## 📈 Security Health Analysis\n\n';
-            
-            if (metrics.mediumPlusVulnerabilities === 0) {
-              report += '✅ **Excellent**: No medium+ severity vulnerabilities detected.\n\n';
-            } else if (metrics.mediumPlusVulnerabilities <= 5) {
-              report += '⚠️ **Good**: Low number of medium+ severity vulnerabilities. Continue monitoring.\n\n';
-            } else {
-              report += '🚨 **Action Required**: High number of medium+ severity vulnerabilities detected.\n\n';
-            }
-            
-            // Resolution Performance
-            if (metrics.meanTimeToResolution <= 7) {
-              report += '🚀 **Fast Response**: Excellent vulnerability resolution time.\n\n';
-            } else if (metrics.meanTimeToResolution <= 14) {
-              report += '👍 **Good Response**: Acceptable vulnerability resolution time.\n\n';
-            } else {
-              report += '⏰ **Slow Response**: Consider improving vulnerability resolution processes.\n\n';
-            }
-            
-            // Auto-closure Performance
-            if (metrics.autoClosureRate >= 80) {
-              report += '🤖 **Automation Success**: High auto-closure rate indicates effective pipeline.\n\n';
-            } else {
-              report += '🔧 **Manual Oversight**: Low auto-closure rate may indicate manual intervention needed.\n\n';
-            }
-            
-            // Recommendations
-            report += '## 🎯 Recommendations\n\n';
-            
-            if (metrics.severityDistribution.critical > 0) {
-              report += '- 🚨 **URGENT**: Address critical vulnerabilities immediately\n';
-            }
-            
-            if (metrics.severityDistribution.high > 0) {
-              report += '- 🔴 **HIGH PRIORITY**: Review and patch high severity vulnerabilities\n';
-            }
-            
-            if (metrics.meanTimeToResolution > 14) {
-              report += '- ⏰ **PROCESS IMPROVEMENT**: Consider streamlining vulnerability resolution workflow\n';
-            }
-            
-            if (metrics.autoClosureRate < 80) {
-              report += '- 🔧 **AUTOMATION**: Review auto-closure logic and improve detection accuracy\n';
-            }
-            
-            if (metrics.totalVulnerabilities === 0) {
-              report += '- ✅ **MAINTAIN**: Continue current security practices\n';
-            }
-            
-            report += '\n';
-            
-            // Quick Links
-            report += '## 🔗 Quick Actions\n\n';
-            report += '- [View Open Security Issues](../../issues?q=is%3Aissue+is%3Aopen+label%3Asecurity)\n';
-            report += '- [Review Dependabot Alerts](../../security/dependabot)\n';
-            report += '- [Security Advisory Dashboard](../../security/advisories)\n';
-            report += '- [Vulnerability History](../../security)\n\n';
-            
-            // Footer
-            report += '---\n';
-            report += '*This report is generated automatically by the Security Metrics Pipeline*\n';
-            
-            core.setOutput('security-report', report);
-            return report;
-
-      - name: 📄 Create Security Report Issue
-        if: github.event.inputs.generate_report != 'false'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const report = `${{ steps.generate-report.outputs.security-report }}`;
-            const metrics = JSON.parse('${{ steps.collect-metrics.outputs.metrics }}');
-            
-            const reportDate = new Date().toISOString().split('T')[0];
-            const issueTitle = `📊 Security Metrics Report - ${reportDate}`;
-            
+            let complianceStatus;
             try {
-              // Check if there's already a report issue for this week
-              const { data: existingIssues } = await github.rest.issues.listForRepo({
+              complianceStatus = JSON.parse(fs.readFileSync('./compliance_status.json', 'utf8'));
+            } catch (error) {
+              console.log('No compliance status file found, skipping issue creation');
+              return;
+            }
+            
+            if (!complianceStatus.overall_compliant) {
+              const reportContent = fs.readFileSync('./compliance_report.md', 'utf8');
+              
+              const issueTitle = `🚨 Security Compliance Alert - ${new Date().toISOString().split('T')[0]}`;
+              const issueBody = `${reportContent}
+              
+              **This issue was automatically created due to security compliance violations.**
+              
+              Please review and address the non-compliant items listed above.
+              
+              ---
+              Auto-generated by Security Metrics Dashboard | Run #${context.runNumber}`;
+              
+              await github.rest.issues.create({
                 owner: context.repo.owner,
-                repo: context.repo.repo,
-                labels: 'security-report',
-                state: 'open',
-                per_page: 5
+                repo: context.repo.repo,  
+                title: issueTitle,
+                body: issueBody,
+                labels: ['security', 'compliance', 'urgent', 'auto-generated']
               });
               
-              const thisWeekReport = existingIssues.find(issue => 
-                issue.title.includes(reportDate)
-              );
-              
-              if (thisWeekReport) {
-                // Update existing report
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: thisWeekReport.number,
-                  body: report
-                });
-                console.log(`Updated existing security report issue #${thisWeekReport.number}`);
-              } else {
-                // Create new report issue
-                const issue = await github.rest.issues.create({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  title: issueTitle,
-                  body: report,
-                  labels: ['security-report', 'documentation']
-                });
-                console.log(`Created new security report issue #${issue.data.number}`);
-              }
-            } catch (error) {
-              console.error('Error creating/updating report issue:', error);
-              // Don't fail the workflow if report creation fails
+              console.log('Created compliance alert issue');
+            } else {
+              console.log('System is compliant - no alert issue needed');
             }
-
-      - name: 📊 Generate Workflow Summary
+            
+      - name: Upload dashboard artifacts
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-dashboard-${{ github.run_number }}
+          path: |
+            ./security_dashboard.png
+            ./security_metrics.json
+            ./dashboard_summary.json
+            ./compliance_report.md
+            ./compliance_status.json
+          retention-days: 90
+          
+      - name: Update repository README with security badge
+        if: github.event.inputs.report_type == 'comprehensive' || github.event_name == 'schedule'
         run: |
-          echo "# 📊 Security Metrics Dashboard" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Key Findings" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          python3 -c "
+          import json
+          import os
           
-          # Parse metrics for summary
-          METRICS='${{ steps.collect-metrics.outputs.metrics }}'
+          # Load dashboard summary  
+          with open('./dashboard_summary.json', 'r') as f:
+              summary = json.load(f)
           
-          if [ "$METRICS" != "" ]; then
-            echo "✅ Security metrics collected successfully" >> $GITHUB_STEP_SUMMARY
-            echo "📊 Comprehensive security report generated" >> $GITHUB_STEP_SUMMARY
-            echo "📄 Report available in Issues section" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Failed to collect security metrics" >> $GITHUB_STEP_SUMMARY
-          fi
+          # Generate security badge info
+          open_vulns = summary['open_vulnerabilities']
+          critical_open = summary['critical_open']
+          high_open = summary['high_open']
           
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 **Dashboard Links:**" >> $GITHUB_STEP_SUMMARY
-          echo "- [Security Reports](../../issues?q=is%3Aissue+label%3Asecurity-report)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Security Issues](../../issues?q=is%3Aissue+label%3Asecurity)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Dependabot Alerts](../../security/dependabot)" >> $GITHUB_STEP_SUMMARY 
+          if critical_open > 0:
+              badge_color = 'critical'
+              badge_message = f'{critical_open} critical'
+          elif high_open > 0:
+              badge_color = 'important'  
+              badge_message = f'{high_open} high'
+          elif open_vulns > 0:
+              badge_color = 'yellow'
+              badge_message = f'{open_vulns} open'
+          else:
+              badge_color = 'success'
+              badge_message = 'secure'
+          
+          badge_url = f'https://img.shields.io/badge/security-{badge_message.replace(\" \", \"%20\")}-{badge_color}'
+          
+          print(f'Security Badge: ![Security Status]({badge_url})')
+          print(f'Open vulnerabilities: {open_vulns}')
+          print(f'Last updated: {summary[\"generated_at\"]}')
+          
+          # Save badge info for potential README update
+          badge_info = {
+              'badge_url': badge_url,
+              'status_message': badge_message,
+              'last_updated': summary['generated_at'],
+              'open_vulnerabilities': open_vulns
+          }
+          
+          with open('./security_badge.json', 'w') as f:
+              json.dump(badge_info, f, indent=2)
+          "
+          
+      - name: Generate executive summary
+        run: |
+          python3 -c "
+          import json
+          from datetime import datetime
+          
+          # Load all data
+          with open('./dashboard_summary.json', 'r') as f:
+              summary = json.load(f)
+          
+          # Generate executive summary
+          exec_summary = f'''# WebGoat Security Executive Summary
+          
+          **Report Period**: {summary['period_days']} days  
+          **Generated**: {datetime.now().strftime('%B %d, %Y')}  
+          
+          ## Security Status Overview
+          
+          ### 🎯 Key Metrics
+          - **Total Vulnerabilities Detected**: {summary['total_vulnerabilities']}
+          - **Currently Open**: {summary['open_vulnerabilities']}
+          - **High Priority Issues**: {summary['high_open']}
+          - **Critical Issues**: {summary['critical_open']}
+          - **Overdue Issues**: {summary['overdue_issues']}
+          
+          ### ⚡ Performance Indicators  
+          - **Mean Time to Resolution**: {summary['mttr_days']} days
+          - **Security Scan Success Rate**: {summary['scan_success_rate']}%
+          - **Scan Frequency**: {summary['avg_scans_per_day']} scans/day
+          
+          ### 📊 Security Posture
+          '''
+          
+          if summary['critical_open'] == 0 and summary['high_open'] == 0:
+              exec_summary += '✅ **GOOD**: No critical or high-severity vulnerabilities open\\n'
+          elif summary['critical_open'] > 0:
+              exec_summary += f'🚨 **ATTENTION REQUIRED**: {summary[\"critical_open\"]} critical vulnerabilities need immediate attention\\n'
+          elif summary['high_open'] > 0:
+              exec_summary += f'⚠️ **MODERATE RISK**: {summary[\"high_open\"]} high-severity vulnerabilities require prompt resolution\\n'
+          
+          if summary['overdue_issues'] > 0:
+              exec_summary += f'🕐 **OVERDUE**: {summary[\"overdue_issues\"]} security issues have exceeded target resolution time\\n'
+          
+          if summary['scan_success_rate'] >= 95:
+              exec_summary += '✅ **RELIABLE**: Security scanning pipeline is performing well\\n'
+          else:
+              exec_summary += '⚠️ **ATTENTION**: Security scan reliability below target (95%)\\n'
+          
+          exec_summary += f'''
+          
+          ### 🎯 Next Steps
+          1. **Immediate**: Address any critical and high-severity open issues
+          2. **Short-term**: Resolve overdue security issues  
+          3. **Ongoing**: Maintain scan reliability and response times
+          
+          ### 📈 Trend Analysis
+          *Security pipeline is {'actively' if summary['avg_scans_per_day'] >= 1 else 'periodically'} monitoring for vulnerabilities with {summary['scan_success_rate']}% reliability.*
+          
+          ---
+          *This summary is automatically generated from WebGoat security pipeline data.*
+          '''
+          
+          with open('./executive_summary.md', 'w') as f:
+              f.write(exec_summary)
+          
+          print('Executive summary generated')
+          "
+          
+      - name: Final summary
+        run: |
+          echo "=== Security Dashboard Generation Complete ==="
+          echo "📊 Dashboard: security_dashboard.png"
+          echo "📋 Metrics: security_metrics.json" 
+          echo "📈 Summary: dashboard_summary.json"
+          echo "🏛️ Compliance: compliance_report.md"
+          echo "👔 Executive: executive_summary.md"
+          echo "🎫 Badge: security_badge.json"
+          echo "==============================================" 
