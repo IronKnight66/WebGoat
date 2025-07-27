@@ -43,7 +43,7 @@ jobs:
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
 
-            - name: 🔍 Security Vulnerability Analysis
+      - name: 🔍 Security Vulnerability Analysis
         id: dependabot-scan
         uses: actions/github-script@v7
         with:
