@@ -16,7 +16,6 @@ The security pipeline consists of four main components:
 
 Before setting up the pipeline, ensure you have:
 
-- [x] GitHub Advanced Security enabled for the repository
 - [x] Repository permissions for creating issues and managing security events
 - [x] Dependabot alerts enabled for the repository
 
@@ -29,7 +28,6 @@ Before setting up the pipeline, ensure you have:
 2. Enable **Dependency graph**
 3. Enable **Dependabot alerts**  
 4. Enable **Dependabot security updates**
-5. Enable **Code scanning** (if using GitHub Advanced Security)
 
 #### Repository Permissions
 Ensure the following permissions are enabled:
@@ -89,11 +87,10 @@ The pipeline uses the following default severity handling:
 
 **Workflow Steps**:
 1. **Build Analysis** - Compiles project and analyzes dependencies
-2. **CodeQL Scanning** - GitHub's semantic code analysis
-3. **Dependabot Alert Check** - Retrieves current vulnerability alerts
-4. **Severity Filtering** - Categorizes findings by risk level
-5. **PR Feedback** - Posts detailed vulnerability reports as comments
-6. **Status Checks** - Blocks merges for high/critical issues
+2. **Dependabot Alert Check** - Retrieves current vulnerability alerts
+3. **Severity Filtering** - Categorizes findings by risk level
+4. **PR Feedback** - Posts detailed vulnerability reports as comments
+5. **Status Checks** - Blocks merges for high/critical issues
 
 **Sample PR Comment**:
 ```markdown

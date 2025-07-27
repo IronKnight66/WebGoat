@@ -47,14 +47,6 @@ jobs:
         run: |
           mvn clean compile -DskipTests
           
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java
-          
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        
       - name: Get Dependabot vulnerability alerts
         id: get-alerts
         uses: actions/github-script@v7
