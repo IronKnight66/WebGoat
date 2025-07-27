@@ -15,9 +15,9 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  security-events: write
+  security-events: read
   actions: read
-  id-token: write
+  checks: write
 
 jobs:
   security-scan:

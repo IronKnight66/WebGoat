@@ -1,0 +1,83 @@
+name: Test Dependabot API Access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  test-dependabot-access:
+    name: Test Dependabot API Access
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Test Dependabot API Access
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            console.log('🔍 Testing Dependabot API Access...');
+            
+            try {
+              // Check repository info first
+              const { data: repo } = await github.rest.repos.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              
+              console.log(`Repository: ${repo.full_name}`);
+              console.log(`Private: ${repo.private}`);
+              console.log(`Has vulnerability alerts: ${repo.has_vulnerability_alerts}`);
+              console.log(`Security and analysis:`, repo.security_and_analysis);
+              
+              // Test Dependabot alerts access
+              const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 5
+              });
+              
+              console.log(`✅ SUCCESS: Found ${alerts.length} Dependabot alerts`);
+              
+              if (alerts.length > 0) {
+                console.log('Sample alert:', {
+                  number: alerts[0].number,
+                  state: alerts[0].state,
+                  severity: alerts[0].security_vulnerability.severity,
+                  package: alerts[0].security_vulnerability.package.name
+                });
+              }
+              
+            } catch (error) {
+              console.error('❌ ERROR accessing Dependabot API:', error.message);
+              console.error('Status:', error.status);
+              console.error('Response:', error.response?.data);
+              
+              // Additional diagnostic information
+              if (error.status === 403) {
+                console.log('🔍 Diagnostic Information:');
+                console.log('This could be due to:');
+                console.log('1. Repository-level Dependabot alerts not enabled');
+                console.log('2. Organization-level security policies');
+                console.log('3. GITHUB_TOKEN permission issues');
+                console.log('4. Repository not configured for vulnerability alerts');
+                
+                // Try to check what permissions we actually have
+                try {
+                  const { data: permissions } = await github.rest.apps.getRepoInstallation({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo
+                  });
+                  console.log('Repository installation permissions:', permissions);
+                } catch (permError) {
+                  console.log('Could not check installation permissions:', permError.message);
+                }
+              }
+              
+              throw error;
+            } 
