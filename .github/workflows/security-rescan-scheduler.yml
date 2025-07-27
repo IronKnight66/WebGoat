@@ -511,9 +511,33 @@ jobs:
       - name: Create missing artifact files
         if: always()
         run: |
-          # Create empty JSON files if they don't exist to prevent artifact upload errors
-          [ ! -f "./current_dependabot_alerts.json" ] && echo '[]' > ./current_dependabot_alerts.json
-          [ ! -f "./rescan_summary.json" ] && echo '{"scan_date":"","scan_type":"skipped","total_vulnerabilities":0,"resolved_issues":0,"still_present_issues":0,"current_cves":[],"source":"none"}' > ./rescan_summary.json
-          [ ! -f "./resolved_issues.json" ] && echo '[]' > ./resolved_issues.json
-          [ ! -f "./closed_issues.json" ] && echo '[]' > ./closed_issues.json  
-          [ ! -f "./open_security_issues.json" ] && echo '[]' > ./open_security_issues.json
+          python3 -c "
+          import json
+          import os
+          
+          # Define files and their default content
+          files_to_create = {
+              './current_dependabot_alerts.json': [],
+              './rescan_summary.json': {
+                  'scan_date': '',
+                  'scan_type': 'skipped',
+                  'total_vulnerabilities': 0,
+                  'resolved_issues': 0,
+                  'still_present_issues': 0,
+                  'current_cves': [],
+                  'source': 'none'
+              },
+              './resolved_issues.json': [],
+              './closed_issues.json': [],
+              './open_security_issues.json': []
+          }
+          
+          # Create missing files
+          for file_path, default_content in files_to_create.items():
+              if not os.path.exists(file_path):
+                  with open(file_path, 'w') as f:
+                      json.dump(default_content, f, indent=2)
+                  print(f'Created missing file: {file_path}')
+              else:
+                  print(f'File already exists: {file_path}')
+          "
