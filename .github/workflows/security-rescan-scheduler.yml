@@ -283,6 +283,12 @@ jobs:
           # Extract current CVEs from Dependabot alerts
           current_cves = set(alert['cve'] for alert in current_alerts)
           
+          # Extract CVEs from existing GitHub issues
+          tracked_cves = set()
+          for issue in open_issues:
+              if issue['cve'] != 'Unknown':
+                  tracked_cves.add(issue['cve'])
+          
           # Find resolved issues (CVEs in GitHub issues but not in current Dependabot alerts)
           resolved_issues = []
           still_present_issues = []
@@ -295,15 +301,41 @@ jobs:
                   else:
                       still_present_issues.append(issue)
           
+          # Find untracked alerts (CVEs in Dependabot alerts but not in GitHub issues)
+          # Only consider alerts that affect the main branch
+          untracked_alerts = []
+          for alert in current_alerts:
+              if alert['cve'] not in tracked_cves:
+                  # Only create issues for vulnerabilities affecting the main branch
+                  # Check if this is a main branch dependency (root-level manifests like pom.xml, package.json, etc.)
+                  manifest_path = alert.get('manifest_path', '')
+                  is_main_branch = (
+                      manifest_path.startswith('./') or  # Root level manifests
+                      manifest_path in ['pom.xml', './pom.xml', '/pom.xml'] or  # Maven main manifest
+                      manifest_path in ['package.json', './package.json', '/package.json'] or  # NPM main manifest
+                      manifest_path in ['requirements.txt', './requirements.txt', '/requirements.txt'] or  # Python main manifest
+                      manifest_path.count('/') <= 1  # Root or one level deep (likely main branch)
+                  )
+                  
+                  if is_main_branch:
+                      untracked_alerts.append(alert)
+                  else:
+                      print(f'Skipping alert for {alert[\"cve\"]} - not main branch (manifest: {manifest_path})')
+          
           # Set outputs
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f'resolved_count={len(resolved_issues)}\n')
               f.write(f'still_present_count={len(still_present_issues)}\n')
+              f.write(f'untracked_count={len(untracked_alerts)}\n')
               f.write(f'total_current_vulnerabilities={len(current_cves)}\n')
           
           # Save resolved issues for closure
           with open('./resolved_issues.json', 'w') as f:
               json.dump(resolved_issues, f, indent=2)
+          
+          # Save untracked alerts for issue creation
+          with open('./untracked_alerts.json', 'w') as f:
+              json.dump(untracked_alerts, f, indent=2)
           
           # Save current state for tracking
           scan_summary = {
@@ -312,6 +344,7 @@ jobs:
               'total_vulnerabilities': len(current_cves),
               'resolved_issues': len(resolved_issues),
               'still_present_issues': len(still_present_issues),
+              'untracked_alerts': len(untracked_alerts),
               'current_cves': list(current_cves),
               'source': 'dependabot'
           }
@@ -323,8 +356,181 @@ jobs:
           print(f'  - Current vulnerabilities: {len(current_cves)}')
           print(f'  - Resolved issues: {len(resolved_issues)}')
           print(f'  - Still present: {len(still_present_issues)}')
+          print(f'  - Untracked alerts: {len(untracked_alerts)}')
           "
           
+      - name: Create issues for untracked alerts
+        id: create-new-issues
+        if: steps.compare-issues.outputs.untracked_count > 0
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
+          script: |
+            const fs = require('fs');
+            
+            // Load untracked alerts
+            const untrackedAlerts = JSON.parse(fs.readFileSync('./untracked_alerts.json', 'utf8'));
+            const createdIssues = [];
+            
+            console.log('Creating issues for ' + untrackedAlerts.length + ' untracked Dependabot alerts affecting main branch...');
+            
+            // Additional validation to ensure we only process main branch alerts
+            const mainBranchAlerts = untrackedAlerts.filter(alert => {
+              const manifestPath = alert.manifest_path || '';
+              const isMainBranch = (
+                manifestPath.startsWith('./') ||
+                ['pom.xml', './pom.xml', '/pom.xml'].includes(manifestPath) ||
+                ['package.json', './package.json', '/package.json'].includes(manifestPath) ||
+                ['requirements.txt', './requirements.txt', '/requirements.txt'].includes(manifestPath) ||
+                (manifestPath.split('/').length <= 2)  // Root or one level deep
+              );
+              
+              if (!isMainBranch) {
+                console.log('⏭️ Skipping alert for ' + alert.cve + ' - not main branch (manifest: ' + manifestPath + ')');
+              }
+              
+              return isMainBranch;
+            });
+            
+            console.log('Filtered to ' + mainBranchAlerts.length + ' main branch alerts');
+            
+            for (const vuln of mainBranchAlerts) {
+              try {
+                // Calculate target resolution date based on severity
+                const targetDays = vuln.severity === 'critical' ? 7 : vuln.severity === 'high' ? 14 : 30;
+                const targetDate = new Date(Date.now() + targetDays * 24 * 60 * 60 * 1000);
+                
+                const issueTitle = '[SECURITY] ' + vuln.cve + ' in ' + vuln.dependency;
+                const issueBody = '## Security Vulnerability Alert (Auto-detected)\\n\\n' +
+                  '**CVE ID**: `' + vuln.cve + '`\\n' +
+                  '**Package**: `' + vuln.dependency + '`\\n' +
+                  '**Severity**: **' + vuln.severity.toUpperCase() + '**\\n' +
+                  '**CVSS Score**: ' + vuln.cvss_score + '\\n' +
+                  '**Ecosystem**: ' + vuln.package_ecosystem + '\\n' +
+                  '**Manifest**: `' + vuln.manifest_path + '`\\n\\n' +
+                  '### Vulnerability Details\\n' +
+                  (vuln.description || vuln.summary) + '\\n\\n' +
+                  '### Detection Source\\n' +
+                  '🔍 **Auto-detected during security rescan**\\n' +
+                  '- **Detection Date**: ' + new Date(vuln.created_at).toLocaleDateString() + '\\n' +
+                  '- **Alert Age**: ' + Math.floor((Date.now() - new Date(vuln.created_at)) / (1000 * 60 * 60 * 24)) + ' days\\n' +
+                  '- **Branch Affected**: Main branch\\n\\n' +
+                  '### Affected Components\\n' +
+                  '- [x] Production dependencies\\n' +
+                  '- [ ] Development dependencies\\n' +
+                  '- [ ] Docker base images\\n\\n' +
+                  '### Remediation Plan\\n' +
+                  '- [ ] Review Dependabot alert #' + vuln.alert_number + '\\n' +
+                  '- [ ] Accept Dependabot PR if available\\n' +
+                  '- [ ] Or manually update to patched version: ' + (vuln.patched_versions.join(', ') || 'See advisory') + '\\n' +
+                  '- [ ] Test application functionality\\n' +
+                  '- [ ] Deploy security patch\\n' +
+                  '- [ ] Verify fix resolves alert\\n\\n' +
+                  '### Timeline\\n' +
+                  '- **Discovered**: ' + new Date(vuln.created_at).toLocaleDateString() + '\\n' +
+                  '- **Auto-Tracked**: ' + new Date().toLocaleDateString() + '\\n' +
+                  '- **Target Resolution**: ' + targetDate.toLocaleDateString() + '\\n' +
+                  '- **Days to Resolve**: ' + targetDays + ' days\\n\\n' +
+                  '### References\\n' +
+                  vuln.references.slice(0, 5).map(ref => '- [Reference](' + ref.url + ')').join('\\n') + '\\n\\n' +
+                  '### Dependabot Alert\\n' +
+                  '🔗 **[View Dependabot Alert #' + vuln.alert_number + '](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/security/dependabot/' + vuln.alert_number + ')**\\n\\n' +
+                  '---\\n' +
+                  '**Auto-generated by Security Rescan Pipeline** | Workflow: ' + context.workflow + ' | Run: ' + context.runNumber + '\\n\\n' +
+                  '⚠️ **This vulnerability was detected during automated scanning.** Contact the Application Security Team for assistance with remediation.';
+                
+                // Create the issue
+                const issue = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: issueTitle,
+                  body: issueBody,
+                  labels: [
+                    'security',
+                    'vulnerability',
+                    vuln.severity + '-severity',
+                    'dependabot',
+                    'auto-detected',
+                    'needs-review'
+                  ]
+                });
+                
+                createdIssues.push({
+                  issue_number: issue.data.number,
+                  cve: vuln.cve,
+                  dependency: vuln.dependency,
+                  severity: vuln.severity,
+                  alert_number: vuln.alert_number
+                });
+                
+                console.log('✅ Created issue #' + issue.data.number + ' for ' + vuln.cve + ' in ' + vuln.dependency + ' (main branch)');
+                
+              } catch (error) {
+                console.error('❌ Failed to create issue for ' + vuln.cve + ':', error);
+              }
+            }
+            
+            // Save created issues for tracking
+            fs.writeFileSync('./created_issues.json', JSON.stringify(createdIssues, null, 2));
+            
+            console.log('\\n🎯 Created ' + createdIssues.length + ' new security tracking issues for main branch vulnerabilities');
+            return createdIssues.length;
+            
+      - name: Close status issue if new issues created
+        id: close-status-issue
+        if: steps.create-new-issues.outputs.result > 0
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
+          script: |
+            try {
+              // Find and close any open "all clear" status issues
+              const statusIssues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'security-status',
+                state: 'open'
+              });
+              
+              for (const issue of statusIssues.data) {
+                if (issue.title.includes('[SECURITY STATUS] All Clear')) {
+                  // Add comment explaining closure
+                  const closureComment = '## 🚨 Security Status Changed (Rescan Detection)\\n\\n' +
+                    '**New untracked vulnerabilities detected during security rescan!**\\n\\n' +
+                    '- **Detection Date**: ' + new Date().toLocaleString() + '\\n' +
+                    '- **Workflow**: ' + context.workflow + '\\n' +
+                    '- **Run**: #' + context.runNumber + '\\n' +
+                    '- **New Issues Created**: ' + '${{ steps.create-new-issues.outputs.result }}' + '\\n\\n' +
+                    '**Action Taken**: The security rescan pipeline discovered Dependabot alerts that were not being tracked as GitHub issues. ' +
+                    'New security issues have been automatically created to track these vulnerabilities.\\n\\n' +
+                    'This status issue is being closed as the \"all clear\" status is no longer accurate. ' +
+                    'A new status issue will be created once all security issues are resolved.\\n\\n' +
+                    '---\\n' +
+                    '**Auto-closed by Security Rescan Pipeline**';
+                  
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: closureComment
+                  });
+                  
+                  // Close the status issue
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    state: 'closed',
+                    labels: [...issue.labels.map(l => l.name), 'status-changed', 'auto-closed']
+                  });
+                  
+                  console.log('Closed status issue #' + issue.number + ' due to newly detected vulnerabilities');
+                }
+              }
+            } catch (error) {
+              console.error('Failed to close status issues:', error);
+            }
+            
       - name: Close resolved security issues
         id: close-issues
         if: steps.compare-issues.outputs.resolved_count > 0
@@ -482,6 +688,7 @@ jobs:
           
           resolved_count = '${{ steps.compare-issues.outputs.resolved_count || 0 }}'
           closed_count = '${{ steps.close-issues.outputs.result || 0 }}'
+          created_count = '${{ steps.create-new-issues.outputs.result || 0 }}'
           overdue_count = '${{ steps.update-overdue.outputs.result || 0 }}'
           
           print('=== Dependabot Security Rescan Summary ===')
@@ -489,6 +696,7 @@ jobs:
           print(f'Current Dependabot Alerts: {summary[\"total_vulnerabilities\"]}')
           print(f'Issues Resolved: {resolved_count}')
           print(f'Issues Closed: {closed_count}')
+          print(f'New Issues Created: {created_count}')
           print(f'Overdue Issues Updated: {overdue_count}')
           print(f'Still Present: {summary[\"still_present_issues\"]}')
           print(f'Source: {summary[\"source\"]}')
@@ -506,6 +714,8 @@ jobs:
             ./resolved_issues.json
             ./closed_issues.json
             ./open_security_issues.json
+            ./untracked_alerts.json
+            ./created_issues.json
           retention-days: 60 
           
       - name: Create missing artifact files
@@ -529,7 +739,9 @@ jobs:
               },
               './resolved_issues.json': [],
               './closed_issues.json': [],
-              './open_security_issues.json': []
+              './open_security_issues.json': [],
+              './untracked_alerts.json': [],
+              './created_issues.json': []
           }
           
           # Create missing files
