@@ -17,12 +17,7 @@ on:
     paths:
       - 'pom.xml'
 
-permissions:
-  contents: read
-  issues: write
-  pull-requests: read
-  security-events: read
-  actions: read
+permissions: write-all
 
 jobs:
   rescan-and-auto-close:

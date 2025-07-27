@@ -3,14 +3,7 @@ name: Test Dependabot API Access
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  security-events: read
-  issues: read
-  pull-requests: read
-  actions: read
-  checks: read
-  repository-projects: read
+permissions: write-all  
 
 jobs:
   test-dependabot-access:
