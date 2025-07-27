@@ -15,7 +15,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  security-events: read
+  security-events: write
   actions: read
   issues: write
 
@@ -113,6 +113,15 @@ jobs:
               
             } catch (error) {
               console.error('Error fetching Dependabot alerts:', error);
+              
+              if (error.status === 403) {
+                console.error('❌ Dependabot alerts are not accessible. Please ensure:');
+                console.error('  1. Repository has Dependabot alerts enabled');
+                console.error('  2. Workflow has security-events: write permission');
+                console.error('  3. Repository is public or has GitHub Advanced Security enabled');
+                console.error('  4. Organization settings allow Dependabot access');
+              }
+              
               core.setOutput('scan_completed', 'false');
               core.setOutput('total_count', 0);
               core.setOutput('high_count', 0);

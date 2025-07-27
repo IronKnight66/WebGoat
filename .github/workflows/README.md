@@ -34,7 +34,7 @@ Ensure the following permissions are enabled:
 - `contents: read` - Access repository code
 - `issues: write` - Create/update/close issues
 - `pull-requests: write` - Add comments and status checks
-- `security-events: read` - Access Dependabot alerts
+- `security-events: write` - Access and manage Dependabot alerts
 - `actions: read` - Access workflow metadata
 
 ### 2. Configure Team Members
@@ -273,28 +273,37 @@ Integrate with external systems by adding notification steps:
 
 ### Common Issues
 
-#### 1. Dependabot Alerts Not Appearing
+#### 1. Dependabot API Access Denied (403 Error)
+**Problem**: "Resource not accessible by integration" error  
+**Solution**: 
+- Verify repository has Dependabot alerts enabled in **Settings** → **Security & analysis**
+- Ensure workflow has `security-events: write` permission
+- For private repositories, verify GitHub Advanced Security is enabled
+- Check organization settings allow Dependabot access
+- Confirm the repository has supported package files (pom.xml, package.json, etc.)
+
+#### 2. Dependabot Alerts Not Appearing
 **Problem**: Pipeline not detecting vulnerabilities  
 **Solution**: 
 - Verify Dependabot is enabled in repository settings
 - Check that dependency graph is enabled
-- Ensure repository has supported package files (pom.xml, package.json, etc.)
+- Wait for initial Dependabot scan to complete (can take several minutes)
 
-#### 2. False Positives in Issue Creation
+#### 3. False Positives in Issue Creation
 **Problem**: Issues created for resolved vulnerabilities  
 **Solution**:
 - Review Dependabot alert state synchronization
 - Check issue closure logic in rescan scheduler
 - Verify CVE matching logic between alerts and issues
 
-#### 3. Workflow Permission Errors  
+#### 4. Workflow Permission Errors  
 **Problem**: GitHub API permission issues
 **Solution**:
 - Verify repository has required permissions enabled
 - Check workflow token permissions in YAML files
 - Ensure team members have appropriate repository access
 
-#### 4. Build Failures During Scanning
+#### 5. Build Failures During Scanning
 **Problem**: Maven compilation errors during dependency analysis
 **Solution**:
 - Check Java version compatibility (using JDK 23)
