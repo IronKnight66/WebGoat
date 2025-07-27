@@ -17,6 +17,7 @@ permissions:
   pull-requests: write
   security-events: write
   actions: read
+  id-token: write
 
 jobs:
   security-scan:
@@ -42,13 +43,26 @@ jobs:
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
 
-      - name: 🔍 Security Vulnerability Analysis
+            - name: 🔍 Security Vulnerability Analysis
         id: dependabot-scan
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
+              // First, let's check what permissions we have
+              console.log('🔍 Checking repository and token permissions...');
+              
+              // Check repository security settings
+              const { data: repo } = await github.rest.repos.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              
+              console.log(`Repository: ${repo.full_name}`);
+              console.log(`Private: ${repo.private}`);
+              console.log(`Security analysis enabled: ${repo.security_and_analysis?.advanced_security?.status || 'unknown'}`);
+              
               // Try to get repository vulnerability alerts
               const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
                 owner: context.repo.owner,
@@ -77,27 +91,128 @@ jobs:
               
               return mediumPlusVulns;
             } catch (error) {
-              console.warn('⚠️ Dependabot API not accessible:', error.message);
+              console.error('❌ Dependabot API Error Details:');
+              console.error(`Status: ${error.status}`);
+              console.error(`Message: ${error.message}`);
+              console.error(`URL: ${error.request?.url}`);
               
-              // Handle 403 errors (GitHub Advanced Security not enabled)
+              if (error.response?.headers) {
+                console.error('Response headers:');
+                const relevantHeaders = ['x-accepted-github-permissions', 'x-oauth-scopes', 'x-accepted-oauth-scopes'];
+                relevantHeaders.forEach(header => {
+                  if (error.response.headers[header]) {
+                    console.error(`  ${header}: ${error.response.headers[header]}`);
+                  }
+                });
+              }
+              
+              // Handle 403 errors with more specific diagnostics
               if (error.status === 403) {
-                console.log('📋 GitHub Advanced Security is required for Dependabot alerts API');
-                console.log('💡 Alternative: Using Maven dependency check as fallback');
+                console.log('🔍 Diagnosing 403 Forbidden Error...');
                 
-                // Set fallback outputs
+                // Check if it's a token permission issue
+                if (error.response?.headers['x-accepted-github-permissions']) {
+                  console.log('📋 Required permissions:', error.response.headers['x-accepted-github-permissions']);
+                }
+                
+                console.log('💡 Possible causes:');
+                console.log('1. Repository-level: Dependabot alerts not enabled');
+                console.log('2. Organization-level: Security policies blocking access');
+                console.log('3. Token-level: GITHUB_TOKEN lacks required permissions');
+                console.log('4. Feature-level: Dependabot not configured for this repository');
+                
+                console.log('🔧 Recommended fixes:');
+                console.log('1. Check: Repository Settings → Security & analysis → Dependabot alerts');
+                console.log('2. Check: Organization security policies');
+                console.log('3. Try: Using a Personal Access Token with security:read scope');
+                console.log('4. Verify: Dependabot.yml configuration exists');
+                
+                // Set fallback outputs with diagnostic info
                 core.setOutput('total-vulns', 0);
                 core.setOutput('medium-plus-vulns', 0);
                 core.setOutput('vulnerabilities', JSON.stringify([]));
                 core.setOutput('scan-method', 'fallback-required');
                 core.setOutput('scan-status', 'limited');
-                core.setOutput('error-reason', 'GitHub Advanced Security not enabled');
+                core.setOutput('error-reason', 'Dependabot API access denied - check permissions and configuration');
+                core.setOutput('error-details', JSON.stringify({
+                  status: error.status,
+                  message: error.message,
+                  requiredPermissions: error.response?.headers['x-accepted-github-permissions'] || 'unknown'
+                }));
                 
                 return [];
               } else {
                 // For other errors, fail the workflow
-                                 core.setFailed(`Failed to fetch vulnerability alerts: ${error.message}`);
-               }
-             }
+                core.setFailed(`Failed to fetch vulnerability alerts: ${error.message}`);
+              }
+            }
+
+      - name: 🔧 Advanced Troubleshooting
+        if: steps.dependabot-scan.outputs.scan-method == 'fallback-required'
+        id: troubleshooting
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            console.log('🔍 Running Advanced Troubleshooting...');
+            
+            try {
+              // Check if Dependabot is actually configured
+              console.log('📋 Checking Dependabot configuration...');
+              
+              // Try to get dependabot.yml file
+              try {
+                const { data: dependabotConfig } = await github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path: '.github/dependabot.yml'
+                });
+                console.log('✅ Dependabot configuration found');
+              } catch (configError) {
+                if (configError.status === 404) {
+                  console.log('⚠️ No .github/dependabot.yml found - Dependabot may not be configured');
+                  console.log('💡 This could explain why Dependabot alerts API is not accessible');
+                } else {
+                  console.log('❓ Could not check Dependabot configuration');
+                }
+              }
+              
+              // Check organization settings
+              console.log('🏢 Checking organization permissions...');
+              try {
+                const { data: org } = await github.rest.orgs.get({
+                  org: context.repo.owner
+                });
+                console.log(`Organization: ${org.login}`);
+                console.log(`Advanced Security enabled for org: ${org.advanced_security_enabled_for_new_repositories || 'unknown'}`);
+              } catch (orgError) {
+                console.log('📝 Repository may be personal (not organization)');
+              }
+              
+              console.log('');
+              console.log('🚀 SOLUTIONS TO TRY:');
+              console.log('');
+              console.log('1. VERIFY DEPENDABOT IS ENABLED:');
+              console.log('   → Go to: Repository Settings → Security & analysis');
+              console.log('   → Ensure "Dependabot alerts" is enabled');
+              console.log('   → Ensure "Dependabot security updates" is enabled');
+              console.log('');
+              console.log('2. CHECK DEPENDABOT CONFIGURATION:');
+              console.log('   → Ensure .github/dependabot.yml exists and is valid');
+              console.log('   → Run a manual Dependabot check to populate alerts');
+              console.log('');
+              console.log('3. ORGANIZATION SETTINGS (if applicable):');
+              console.log('   → Organization Settings → Security & analysis');
+              console.log('   → Check if organization policies allow Dependabot');
+              console.log('');
+              console.log('4. ALTERNATIVE: USE PERSONAL ACCESS TOKEN');
+              console.log('   → Create PAT with "security:read" scope');
+              console.log('   → Add as repository secret: SECURITY_TOKEN');
+              console.log('   → Modify workflow to use: secrets.SECURITY_TOKEN');
+              
+            } catch (error) {
+              console.error('Error in troubleshooting:', error.message);
+            }
 
       - name: 🔧 Fallback Maven Security Check
         if: steps.dependabot-scan.outputs.scan-method == 'fallback-required'
