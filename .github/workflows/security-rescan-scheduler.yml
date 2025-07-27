@@ -469,6 +469,7 @@ jobs:
             return overdueIssues.length;
             
       - name: Generate rescan summary
+        if: steps.fresh-scan.outputs.rescan_completed == 'true'
         run: |
           python3 -c "
           import json
@@ -506,3 +507,13 @@ jobs:
             ./closed_issues.json
             ./open_security_issues.json
           retention-days: 60 
+          
+      - name: Create missing artifact files
+        if: always()
+        run: |
+          # Create empty JSON files if they don't exist to prevent artifact upload errors
+          [ ! -f "./current_dependabot_alerts.json" ] && echo '[]' > ./current_dependabot_alerts.json
+          [ ! -f "./rescan_summary.json" ] && echo '{"scan_date":"","scan_type":"skipped","total_vulnerabilities":0,"resolved_issues":0,"still_present_issues":0,"current_cves":[],"source":"none"}' > ./rescan_summary.json
+          [ ! -f "./resolved_issues.json" ] && echo '[]' > ./resolved_issues.json
+          [ ! -f "./closed_issues.json" ] && echo '[]' > ./closed_issues.json  
+          [ ! -f "./open_security_issues.json" ] && echo '[]' > ./open_security_issues.json
