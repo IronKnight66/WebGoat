@@ -51,6 +51,7 @@ jobs:
         id: get-alerts
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             try {
               // Get all Dependabot alerts for the repository
@@ -115,11 +116,13 @@ jobs:
               console.error('Error fetching Dependabot alerts:', error);
               
               if (error.status === 403) {
-                console.error('❌ Dependabot alerts are not accessible. Please ensure:');
-                console.error('  1. Repository has Dependabot alerts enabled');
-                console.error('  2. Workflow has security-events: write permission');
-                console.error('  3. Repository is public or has GitHub Advanced Security enabled');
-                console.error('  4. Organization settings allow Dependabot access');
+                console.error('❌ Dependabot alerts are not accessible. Solutions:');
+                console.error('  🔑 RECOMMENDED: Set up a Personal Access Token (DEPENDABOT_PAT secret)');
+                console.error('  📋 Alternative: Ensure repository has Dependabot alerts enabled');
+                console.error('  🔒 For private repos: Enable GitHub Advanced Security');
+                console.error('  🏢 Check organization settings allow Dependabot access');
+                console.error('');
+                console.error('  See README for detailed PAT setup instructions.');
               }
               
               core.setOutput('scan_completed', 'false');
@@ -208,6 +211,7 @@ jobs:
         if: steps.get-alerts.outputs.total_count > 0
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             const comment = fs.readFileSync('./pr_comment.md', 'utf8');
@@ -223,6 +227,7 @@ jobs:
         if: always()
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const highCount = '${{ steps.get-alerts.outputs.high_count || 0 }}';
             const mediumCount = '${{ steps.get-alerts.outputs.medium_count || 0 }}';

@@ -29,8 +29,25 @@ Before setting up the pipeline, ensure you have:
 3. Enable **Dependabot alerts**  
 4. Enable **Dependabot security updates**
 
-#### Repository Permissions
-Ensure the following permissions are enabled:
+#### Set Up Personal Access Token (Recommended)
+For reliable Dependabot API access, create a Personal Access Token:
+
+1. **Create PAT**:
+   - Go to **GitHub Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+   - Click **Generate new token (classic)**
+   - Set expiration and select these permissions:
+     - `repo` (Full repository access)
+     - `security_events` (Read and write security events)
+     - `read:org` (Read organization data)
+
+2. **Add to repository secrets**:
+   - Go to your repository **Settings** → **Secrets and variables** → **Actions**
+   - Click **New repository secret**
+   - Name: `DEPENDABOT_PAT`
+   - Value: Your generated token
+
+#### Repository Permissions (Fallback)
+If not using PAT, ensure the following permissions are enabled:
 - `contents: read` - Access repository code
 - `issues: write` - Create/update/close issues
 - `pull-requests: write` - Add comments and status checks
@@ -276,11 +293,12 @@ Integrate with external systems by adding notification steps:
 #### 1. Dependabot API Access Denied (403 Error)
 **Problem**: "Resource not accessible by integration" error  
 **Solution**: 
+- **Recommended**: Set up a Personal Access Token (see setup instructions above)
 - Verify repository has Dependabot alerts enabled in **Settings** → **Security & analysis**
-- Ensure workflow has `security-events: write` permission
 - For private repositories, verify GitHub Advanced Security is enabled
 - Check organization settings allow Dependabot access
 - Confirm the repository has supported package files (pom.xml, package.json, etc.)
+- Ensure PAT has `repo` and `security_events` permissions
 
 #### 2. Dependabot Alerts Not Appearing
 **Problem**: Pipeline not detecting vulnerabilities  
@@ -420,3 +438,23 @@ Weekly executive reports can be automatically:
 ---
 
 *This security pipeline is designed to provide comprehensive, automated security monitoring for the WebGoat project using GitHub's native Dependabot capabilities while maintaining development velocity and ensuring compliance with security best practices.* 
+
+## 🔑 Authentication Methods
+
+The pipeline supports two authentication methods for accessing GitHub's Dependabot API:
+
+### Method 1: Personal Access Token (Recommended)
+- ✅ **More reliable access** to Dependabot alerts
+- ✅ **Works across all repository types** (public/private)
+- ✅ **Bypasses workflow token limitations**
+- ✅ **Better for organization-level repositories**
+
+Set up using the instructions above in the "Set Up Personal Access Token" section.
+
+### Method 2: Default GitHub Token (Fallback)
+- ⚠️ **Limited by workflow permissions**
+- ⚠️ **May not work in all organizational settings**
+- ✅ **No additional setup required**
+- ✅ **Automatically falls back if PAT not provided**
+
+The workflows automatically use `DEPENDABOT_PAT` if available, otherwise fall back to `github.token`. 

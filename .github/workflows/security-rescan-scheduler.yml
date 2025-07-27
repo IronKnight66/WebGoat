@@ -57,6 +57,7 @@ jobs:
         id: get-issues
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const issues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
@@ -111,6 +112,7 @@ jobs:
         id: fresh-scan
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             try {
               let alerts = [];
@@ -169,11 +171,13 @@ jobs:
               console.error('Error fetching Dependabot alerts:', error);
               
               if (error.status === 403) {
-                console.error('❌ Dependabot alerts are not accessible. Please ensure:');
-                console.error('  1. Repository has Dependabot alerts enabled');
-                console.error('  2. Workflow has security-events: write permission');
-                console.error('  3. Repository is public or has GitHub Advanced Security enabled');
-                console.error('  4. Organization settings allow Dependabot access');
+                console.error('❌ Dependabot alerts are not accessible. Solutions:');
+                console.error('  🔑 RECOMMENDED: Set up a Personal Access Token (DEPENDABOT_PAT secret)');
+                console.error('  📋 Alternative: Ensure repository has Dependabot alerts enabled');
+                console.error('  🔒 For private repos: Enable GitHub Advanced Security');
+                console.error('  🏢 Check organization settings allow Dependabot access');
+                console.error('');
+                console.error('  See README for detailed PAT setup instructions.');
               }
               
               return { rescan_completed: false, total_alerts: 0, current_cves: [] };
@@ -246,6 +250,7 @@ jobs:
         if: steps.compare-issues.outputs.resolved_count > 0
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             const resolvedIssues = JSON.parse(fs.readFileSync('./resolved_issues.json', 'utf8'));
@@ -311,6 +316,7 @@ jobs:
         id: update-overdue
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             const openIssues = JSON.parse(fs.readFileSync('./open_security_issues.json', 'utf8'));

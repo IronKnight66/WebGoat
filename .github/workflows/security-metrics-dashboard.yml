@@ -54,6 +54,7 @@ jobs:
         id: collect-metrics
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             const timePeriodDays = parseInt('${{ github.event.inputs.time_period || 30 }}');
@@ -418,6 +419,7 @@ jobs:
         if: github.event.inputs.report_type == 'compliance' && hashFiles('./compliance_status.json') != ''
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             

@@ -69,6 +69,7 @@ jobs:
         id: get-current-alerts
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             try {
               // Get all current Dependabot alerts
@@ -113,11 +114,13 @@ jobs:
               console.error('Error fetching Dependabot alerts:', error);
               
               if (error.status === 403) {
-                console.error('❌ Dependabot alerts are not accessible. Please ensure:');
-                console.error('  1. Repository has Dependabot alerts enabled');
-                console.error('  2. Workflow has security-events: write permission');
-                console.error('  3. Repository is public or has GitHub Advanced Security enabled');
-                console.error('  4. Organization settings allow Dependabot access');
+                console.error('❌ Dependabot alerts are not accessible. Solutions:');
+                console.error('  🔑 RECOMMENDED: Set up a Personal Access Token (DEPENDABOT_PAT secret)');
+                console.error('  📋 Alternative: Ensure repository has Dependabot alerts enabled');
+                console.error('  🔒 For private repos: Enable GitHub Advanced Security');
+                console.error('  🏢 Check organization settings allow Dependabot access');
+                console.error('');
+                console.error('  See README for detailed PAT setup instructions.');
               }
               
               return { total_count: 0, high_count: 0, medium_count: 0, vulnerabilities: [] };
@@ -127,6 +130,7 @@ jobs:
         id: compare-results
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             
@@ -187,6 +191,7 @@ jobs:
         if: fromJSON(steps.compare-results.outputs.has_new_vulnerabilities)
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             const newVulnerabilities = JSON.parse(fs.readFileSync('./new_vulnerabilities.json', 'utf8'));
@@ -306,6 +311,7 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
             const scanResults = JSON.parse(fs.readFileSync('./current_scan_results.json', 'utf8'));
