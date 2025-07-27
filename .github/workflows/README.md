@@ -297,7 +297,7 @@ Integrate with external systems by adding notification steps:
 #### 4. Build Failures During Scanning
 **Problem**: Maven compilation errors during dependency analysis
 **Solution**:
-- Check Java version compatibility (using JDK 21)
+- Check Java version compatibility (using JDK 23)
 - Review Maven cache configuration
 - Ensure all required dependencies are available
 
