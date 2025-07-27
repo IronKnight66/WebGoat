@@ -276,6 +276,59 @@ jobs:
             
             return createdIssues.length;
             
+      - name: Close status issue if new vulnerabilities found
+        id: close-status-issue
+        if: steps.compare-results.outputs.has_new_vulnerabilities == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
+          script: |
+            try {
+              // Find and close any open "all clear" status issues
+              const statusIssues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'security-status',
+                state: 'open'
+              });
+              
+              for (const issue of statusIssues.data) {
+                if (issue.title.includes('[SECURITY STATUS] All Clear')) {
+                  // Add comment explaining closure
+                  const closureComment = '## 🚨 Security Status Changed\\n\\n' +
+                    '**New vulnerabilities have been detected!**\\n\\n' +
+                    '- **Detection Date**: ' + new Date().toLocaleString() + '\\n' +
+                    '- **Workflow**: ' + context.workflow + '\\n' +
+                    '- **Run**: #' + context.runNumber + '\\n\\n' +
+                    '**Action Taken**: New security issues have been created to track the vulnerabilities.\\n\\n' +
+                    'This status issue is being closed as the \"all clear\" status is no longer accurate. ' +
+                    'A new status issue will be created once all security issues are resolved.\\n\\n' +
+                    '---\\n' +
+                    '**Auto-closed by Security Pipeline**';
+                  
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: closureComment
+                  });
+                  
+                  // Close the status issue
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    state: 'closed',
+                    labels: [...issue.labels.map(l => l.name), 'status-changed', 'auto-closed']
+                  });
+                  
+                  console.log('Closed status issue #' + issue.number + ' due to new vulnerabilities');
+                }
+              }
+            } catch (error) {
+              console.error('Failed to close status issues:', error);
+            }
+            
       - name: Update Security Dashboard
         id: update-dashboard
         run: |
