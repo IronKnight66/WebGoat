@@ -8,6 +8,9 @@ permissions:
   security-events: read
   issues: read
   pull-requests: read
+  actions: read
+  checks: read
+  repository-projects: read
 
 jobs:
   test-dependabot-access:
@@ -31,18 +34,35 @@ jobs:
               
               console.log(`Repository: ${repo.full_name}`);
               console.log(`Private: ${repo.private}`);
-              console.log(`Has vulnerability alerts: ${repo.has_vulnerability_alerts}`);
-              console.log(`Security and analysis:`, repo.security_and_analysis);
+              console.log(`Has vulnerability alerts: ${repo.has_vulnerability_alerts || 'undefined'}`);
+              console.log(`Security and analysis: ${repo.security_and_analysis || 'undefined'}`);
               
-              // Test Dependabot alerts access
-              const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'open',
-                per_page: 5
-              });
+              // Test Dependabot alerts access with error handling
+              let alerts = [];
+              let dependabotAvailable = true;
               
-              console.log(`✅ SUCCESS: Found ${alerts.length} Dependabot alerts`);
+              try {
+                const { data: alertsData } = await github.rest.dependabot.listAlertsForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'open',
+                  per_page: 5
+                });
+                alerts = alertsData;
+                console.log(`✅ SUCCESS: Found ${alerts.length} Dependabot alerts`);
+              } catch (alertError) {
+                if (alertError.status === 403) {
+                  console.warn('⚠️ Dependabot API not accessible - GitHub Advanced Security may not be enabled');
+                  console.warn('To fix: Go to Repository Settings > Security & analysis > Enable Dependabot alerts');
+                  dependabotAvailable = false;
+                } else if (alertError.status === 404) {
+                  console.warn('⚠️ Dependabot API endpoint not found - feature may not be available');
+                  dependabotAvailable = false;
+                } else {
+                  console.error(`❌ ERROR accessing Dependabot API:`, alertError.message);
+                  throw alertError;
+                }
+              }
               
               if (alerts.length > 0) {
                 console.log('Sample alert:', {

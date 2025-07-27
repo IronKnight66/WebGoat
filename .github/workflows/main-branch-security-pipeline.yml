@@ -56,6 +56,43 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
+              console.log('🔍 Checking repository security configuration...');
+              
+              // First check repository settings
+              const { data: repo } = await github.rest.repos.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              
+              console.log(`Repository: ${repo.full_name}`);
+              console.log(`Has vulnerability alerts: ${repo.has_vulnerability_alerts}`);
+              
+              // Check if vulnerability alerts are enabled
+              if (!repo.has_vulnerability_alerts) {
+                console.warn('⚠️  Dependabot alerts are not enabled for this repository');
+                console.log('📋 To enable Dependabot alerts:');
+                console.log('1. Go to repository Settings → Security & analysis');
+                console.log('2. Enable "Dependency graph" if not already enabled');
+                console.log('3. Enable "Dependabot alerts"');
+                console.log('4. Optionally enable "Dependabot security updates"');
+                
+                // Set fallback outputs
+                core.setOutput('total-vulns', 0);
+                core.setOutput('medium-plus-vulns', 0);
+                core.setOutput('new-vulns', 0);
+                core.setOutput('vulnerabilities', JSON.stringify([]));
+                core.setOutput('new-vulnerabilities', JSON.stringify([]));
+                core.setOutput('scan-method', 'dependabot-not-enabled');
+                core.setOutput('scan-status', 'limited');
+                core.setOutput('error-reason', 'Dependabot alerts not enabled in repository settings');
+                
+                return {
+                  total: 0,
+                  mediumPlus: 0,
+                  new: 0
+                };
+              }
+              
               // Try to get all repository vulnerability alerts
               const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
                 owner: context.repo.owner,
@@ -115,10 +152,19 @@ jobs:
             } catch (error) {
               console.warn('⚠️ Dependabot API not accessible:', error.message);
               
-              // Handle 403 errors (GitHub Advanced Security not enabled)
+              // Handle 403 errors (permissions or configuration issues)
               if (error.status === 403) {
-                console.log('📋 GitHub Advanced Security is required for Dependabot alerts API');
-                console.log('💡 Main branch security pipeline will run with limited functionality');
+                console.log('📋 Dependabot API access issue detected');
+                console.log('💡 This usually means:');
+                console.log('1. Dependabot alerts are not enabled in repository settings');
+                console.log('2. GitHub Advanced Security may not be fully configured');
+                console.log('3. Organization policies may be restricting access');
+                
+                console.log('🔧 To fix this:');
+                console.log('1. Go to repository Settings → Security & analysis');
+                console.log('2. Enable "Dependency graph"');
+                console.log('3. Enable "Dependabot alerts"');
+                console.log('4. Ensure "GitHub Advanced Security" is enabled');
                 
                 // Set fallback outputs
                 core.setOutput('total-vulns', 0);
@@ -128,7 +174,7 @@ jobs:
                 core.setOutput('new-vulnerabilities', JSON.stringify([]));
                 core.setOutput('scan-method', 'fallback-required');
                 core.setOutput('scan-status', 'limited');
-                core.setOutput('error-reason', 'GitHub Advanced Security not enabled');
+                core.setOutput('error-reason', 'Dependabot API access denied - check repository configuration');
                 
                 return {
                   total: 0,
