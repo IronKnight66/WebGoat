@@ -77,7 +77,7 @@ jobs:
                 updated_at: issue.updated_at
               }));
             
-            console.log(\`Found \${securityIssues.length} open security issues\`);
+            console.log('Found ' + securityIssues.length + ' open security issues');
             
             // Write to file for later use
             const fs = require('fs');
@@ -144,12 +144,12 @@ jobs:
                 alerts = allAlerts.data;
               }
               
-              console.log(\`Found \${alerts.length} current Dependabot alerts (\${scanType} scan)\`);
+              console.log('Found ' + alerts.length + ' current Dependabot alerts (' + scanType + ' scan)');
               
               // Transform to our format
               const vulnerabilities = alerts.map(alert => ({
                 alert_number: alert.number,
-                cve: alert.security_advisory.cve_id || \`GHSA-\${alert.security_advisory.ghsa_id}\`,
+                cve: alert.security_advisory.cve_id || ('GHSA-' + alert.security_advisory.ghsa_id),
                 dependency: alert.dependency.package.name,
                 severity: alert.security_advisory.severity,
                 state: alert.state,
@@ -300,10 +300,10 @@ jobs:
                   title: issue.title
                 });
                 
-                console.log(\`Closed issue #\${issue.number} for resolved CVE \${issue.cve}\`);
+                console.log('Closed issue #' + issue.number + ' for resolved CVE ' + issue.cve);
                 
               } catch (error) {
-                console.error(\`Failed to close issue #\${issue.number}:\`, error);
+                console.error('Failed to close issue #' + issue.number + ':', error);
               }
             }
             
@@ -381,11 +381,11 @@ jobs:
                 });
                 
               } catch (error) {
-                console.error(\`Failed to update overdue issue #\${issue.number}:\`, error);
+                console.error('Failed to update overdue issue #' + issue.number + ':', error);
               }
             }
             
-            console.log(\`Updated \${overdueIssues.length} overdue issues\`);
+            console.log('Updated ' + overdueIssues.length + ' overdue issues');
             return overdueIssues.length;
             
       - name: Generate rescan summary
