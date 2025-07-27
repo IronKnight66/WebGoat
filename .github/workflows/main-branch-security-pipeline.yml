@@ -313,24 +313,20 @@ jobs:
             const highCount = scanResults.vulnerabilities.filter(v => ['high', 'critical'].includes(v.severity.toLowerCase())).length;
             const mediumCount = scanResults.vulnerabilities.filter(v => v.severity.toLowerCase() === 'medium').length;
             
-            const comment = \`## 📊 Main Branch Security Dashboard Update
-
-**Latest Dependabot Scan Results:**
-- **Total Vulnerabilities**: \${totalCount}
-- **High/Critical**: \${highCount}
-- **Medium**: \${mediumCount}  
-- **Low**: \${totalCount - highCount - mediumCount}
-
-**Scan Details:**
-- Workflow Run: #\${context.runNumber}
-- Commit: \${context.sha.substring(0, 7)}
-- Scan Date: \${new Date().toLocaleString()}
-- Source: GitHub Dependabot
-
-View detailed alerts in the [Security tab](\${context.payload.repository.html_url}/security/dependabot).
-
----
-🔍 **Security Pipeline**: Continuous Dependabot monitoring active\`;
+            const comment = '## 📊 Main Branch Security Dashboard Update\\n\\n' +
+              '**Latest Dependabot Scan Results:**\\n' +
+              '- **Total Vulnerabilities**: ' + totalCount + '\\n' +
+              '- **High/Critical**: ' + highCount + '\\n' +
+              '- **Medium**: ' + mediumCount + '\\n' +
+              '- **Low**: ' + (totalCount - highCount - mediumCount) + '\\n\\n' +
+              '**Scan Details:**\\n' +
+              '- Workflow Run: #' + context.runNumber + '\\n' +
+              '- Commit: ' + context.sha.substring(0, 7) + '\\n' +
+              '- Scan Date: ' + new Date().toLocaleString() + '\\n' +
+              '- Source: GitHub Dependabot\\n\\n' +
+              'View detailed alerts in the [Security tab](' + context.payload.repository.html_url + '/security/dependabot).\\n\\n' +
+              '---\\n' +
+              '🔍 **Security Pipeline**: Continuous Dependabot monitoring active';
             
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
