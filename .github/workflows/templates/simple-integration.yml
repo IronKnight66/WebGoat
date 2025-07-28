@@ -1,6 +1,7 @@
 # Simple Security Integration Template
 # Minimal setup for basic security scanning
 # Copy to .github/workflows/security.yml in your repository
+# This template references: IronKnight66/ApplicationSecurityPipeline
 
 name: Security Scan
 
@@ -20,6 +21,6 @@ permissions:
 
 jobs:
   security:
-    uses: YOUR-ORG/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
+    uses: IronKnight66/ApplicationSecurityPipeline/.github/workflows/security/security-pipeline-dispatcher.yml@main
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }} 

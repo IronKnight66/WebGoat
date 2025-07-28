@@ -1,7 +1,7 @@
 # Template Security Integration for Other Repositories
 # Copy this file to your repository's .github/workflows/ directory
 # Rename it to something like 'security-pipeline.yml'
-# This template references: IronKnight66/ApplicationSecurityPipeline
+# Update the repository reference to point to your WebGoat repository security folder
 
 name: Security Pipeline Integration
 
@@ -14,14 +14,6 @@ on:
   # For Main branch analysis  
   push:
     branches: [ main, master ]
-  
-  # For daily security rescans
-  schedule:
-    - cron: '0 6 * * *'  # Daily at 6 AM UTC
-  
-  # For weekly metrics (Sundays)
-  schedule:
-    - cron: '0 7 * * 0'  # Weekly on Sundays at 7 AM UTC
   
   # Manual trigger
   workflow_dispatch:
