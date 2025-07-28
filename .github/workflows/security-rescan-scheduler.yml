@@ -302,25 +302,10 @@ jobs:
                       still_present_issues.append(issue)
           
           # Find untracked alerts (CVEs in Dependabot alerts but not in GitHub issues)
-          # Only consider alerts that affect the main branch
           untracked_alerts = []
           for alert in current_alerts:
               if alert['cve'] not in tracked_cves:
-                  # Only create issues for vulnerabilities affecting the main branch
-                  # Check if this is a main branch dependency (root-level manifests like pom.xml, package.json, etc.)
-                  manifest_path = alert.get('manifest_path', '')
-                  is_main_branch = (
-                      manifest_path.startswith('./') or  # Root level manifests
-                      manifest_path in ['pom.xml', './pom.xml', '/pom.xml'] or  # Maven main manifest
-                      manifest_path in ['package.json', './package.json', '/package.json'] or  # NPM main manifest
-                      manifest_path in ['requirements.txt', './requirements.txt', '/requirements.txt'] or  # Python main manifest
-                      manifest_path.count('/') <= 1  # Root or one level deep (likely main branch)
-                  )
-                  
-                  if is_main_branch:
-                      untracked_alerts.append(alert)
-                  else:
-                      print(f'Skipping alert for {alert[\"cve\"]} - not main branch (manifest: {manifest_path})')
+                  untracked_alerts.append(alert)
           
           # Set outputs
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
@@ -372,29 +357,9 @@ jobs:
             const untrackedAlerts = JSON.parse(fs.readFileSync('./untracked_alerts.json', 'utf8'));
             const createdIssues = [];
             
-            console.log('Creating issues for ' + untrackedAlerts.length + ' untracked Dependabot alerts affecting main branch...');
+            console.log('Creating issues for ' + untrackedAlerts.length + ' untracked Dependabot alerts...');
             
-            // Additional validation to ensure we only process main branch alerts
-            const mainBranchAlerts = untrackedAlerts.filter(alert => {
-              const manifestPath = alert.manifest_path || '';
-              const isMainBranch = (
-                manifestPath.startsWith('./') ||
-                ['pom.xml', './pom.xml', '/pom.xml'].includes(manifestPath) ||
-                ['package.json', './package.json', '/package.json'].includes(manifestPath) ||
-                ['requirements.txt', './requirements.txt', '/requirements.txt'].includes(manifestPath) ||
-                (manifestPath.split('/').length <= 2)  // Root or one level deep
-              );
-              
-              if (!isMainBranch) {
-                console.log('⏭️ Skipping alert for ' + alert.cve + ' - not main branch (manifest: ' + manifestPath + ')');
-              }
-              
-              return isMainBranch;
-            });
-            
-            console.log('Filtered to ' + mainBranchAlerts.length + ' main branch alerts');
-            
-            for (const vuln of mainBranchAlerts) {
+            for (const vuln of untrackedAlerts) {
               try {
                 // Calculate target resolution date based on severity
                 const targetDays = vuln.severity === 'critical' ? 7 : vuln.severity === 'high' ? 14 : 30;
@@ -413,8 +378,7 @@ jobs:
                   '### Detection Source\\n' +
                   '🔍 **Auto-detected during security rescan**\\n' +
                   '- **Detection Date**: ' + new Date(vuln.created_at).toLocaleDateString() + '\\n' +
-                  '- **Alert Age**: ' + Math.floor((Date.now() - new Date(vuln.created_at)) / (1000 * 60 * 60 * 24)) + ' days\\n' +
-                  '- **Branch Affected**: Main branch\\n\\n' +
+                  '- **Alert Age**: ' + Math.floor((Date.now() - new Date(vuln.created_at)) / (1000 * 60 * 60 * 24)) + ' days\\n\\n' +
                   '### Affected Components\\n' +
                   '- [x] Production dependencies\\n' +
                   '- [ ] Development dependencies\\n' +
@@ -463,7 +427,7 @@ jobs:
                   alert_number: vuln.alert_number
                 });
                 
-                console.log('✅ Created issue #' + issue.data.number + ' for ' + vuln.cve + ' in ' + vuln.dependency + ' (main branch)');
+                console.log('✅ Created issue #' + issue.data.number + ' for ' + vuln.cve + ' in ' + vuln.dependency);
                 
               } catch (error) {
                 console.error('❌ Failed to create issue for ' + vuln.cve + ':', error);
@@ -473,7 +437,7 @@ jobs:
             // Save created issues for tracking
             fs.writeFileSync('./created_issues.json', JSON.stringify(createdIssues, null, 2));
             
-            console.log('\\n🎯 Created ' + createdIssues.length + ' new security tracking issues for main branch vulnerabilities');
+            console.log('\\n🎯 Created ' + createdIssues.length + ' new security tracking issues');
             return createdIssues.length;
             
       - name: Close status issue if new issues created
