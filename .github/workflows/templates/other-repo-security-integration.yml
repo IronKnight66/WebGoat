@@ -1,0 +1,73 @@
+# Template Security Integration for Other Repositories
+# Copy this file to your repository's .github/workflows/ directory
+# Rename it to something like 'security-pipeline.yml'
+# Update the repository reference to point to your WebGoat repository
+
+name: Security Pipeline Integration
+
+on:
+  # For Pull Request scanning
+  pull_request:
+    branches: [ main, master ]
+    types: [opened, synchronize, reopened]
+  
+  # For Main branch analysis  
+  push:
+    branches: [ main, master ]
+  
+  # For daily security rescans
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC
+  
+  # For weekly metrics (Sundays)
+  schedule:
+    - cron: '0 7 * * 0'  # Weekly on Sundays at 7 AM UTC
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan to run'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+        - auto
+        - feature-scan
+        - main-pipeline  
+        - rescan
+        - metrics
+        - all
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  security-pipeline:
+    name: Security Pipeline Dispatcher
+    uses: YOUR-ORG/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    with:
+      trigger_type: 'auto'
+      target_branch: ${{ github.ref_name }}
+      scan_type: ${{ inputs.scan_type || 'auto' }}
+      repository_name: ${{ github.repository }}
+    secrets:
+      DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
+
+  # Optional: Add repository-specific post-processing
+  post-security-scan:
+    needs: security-pipeline
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository-specific post-processing
+        run: |
+          echo "Security scan completed for ${{ github.repository }}"
+          echo "Add any repository-specific actions here"
+          # Examples:
+          # - Send notifications to team channels
+          # - Update internal dashboards
+          # - Trigger additional scans or tests 

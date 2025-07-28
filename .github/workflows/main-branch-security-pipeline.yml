@@ -10,6 +10,17 @@ on:
       - '.github/workflows/**'
       - '.github/dependabot.yml'
       - 'src/**'
+  workflow_call:
+    inputs:
+      context_info:
+        description: 'Context information from dispatcher'
+        required: false
+        type: string
+        default: '{}'
+    secrets:
+      DEPENDABOT_PAT:
+        description: 'Personal Access Token for Dependabot API access'
+        required: false
   workflow_dispatch:
     inputs:
       force_rescan:

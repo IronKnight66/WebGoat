@@ -1,0 +1,242 @@
+name: Security Pipeline Dispatcher
+
+on:
+  workflow_call:
+    inputs:
+      trigger_type:
+        description: 'Type of trigger: pr, push, schedule, manual'
+        required: false
+        type: string
+        default: 'auto'
+      target_branch:
+        description: 'Target branch for the pipeline'
+        required: false
+        type: string
+        default: 'main'
+      scan_type:
+        description: 'Specific scan type: feature-scan, main-pipeline, rescan, metrics'
+        required: false
+        type: string
+        default: 'auto'
+      repository_name:
+        description: 'Name of the calling repository'
+        required: false
+        type: string
+        default: ${{ github.repository }}
+    secrets:
+      DEPENDABOT_PAT:
+        description: 'Personal Access Token for Dependabot API access'
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  determine-pipeline:
+    runs-on: ubuntu-latest
+    outputs:
+      pipeline_type: ${{ steps.router.outputs.pipeline_type }}
+      should_run_feature_scan: ${{ steps.router.outputs.should_run_feature_scan }}
+      should_run_main_pipeline: ${{ steps.router.outputs.should_run_main_pipeline }}
+      should_run_rescan: ${{ steps.router.outputs.should_run_rescan }}
+      should_run_metrics: ${{ steps.router.outputs.should_run_metrics }}
+      context_info: ${{ steps.router.outputs.context_info }}
+    
+    steps:
+      - name: Pipeline Router
+        id: router
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Get inputs and context
+            const triggerType = '${{ inputs.trigger_type }}' || 'auto';
+            const scanType = '${{ inputs.scan_type }}' || 'auto';
+            const targetBranch = '${{ inputs.target_branch }}' || 'main';
+            const eventName = context.eventName;
+            const repository = '${{ inputs.repository_name }}' || context.repo.repo;
+            
+            console.log('🔍 Security Pipeline Dispatcher');
+            console.log('Repository:', repository);
+            console.log('Event:', eventName);
+            console.log('Trigger Type:', triggerType);
+            console.log('Scan Type:', scanType);
+            console.log('Target Branch:', targetBranch);
+            
+            let pipelineType = 'none';
+            let shouldRunFeatureScan = false;
+            let shouldRunMainPipeline = false;
+            let shouldRunRescan = false;
+            let shouldRunMetrics = false;
+            
+            // Auto-detection logic
+            if (triggerType === 'auto' && scanType === 'auto') {
+              if (eventName === 'pull_request' || eventName === 'pull_request_target') {
+                pipelineType = 'feature-scan';
+                shouldRunFeatureScan = true;
+                console.log('✅ Auto-detected: Feature Branch Security Scan (PR event)');
+              } 
+              else if (eventName === 'push') {
+                if (targetBranch === 'main' || targetBranch === 'master') {
+                  pipelineType = 'main-pipeline';
+                  shouldRunMainPipeline = true;
+                  console.log('✅ Auto-detected: Main Branch Security Pipeline (Push to main)');
+                } else {
+                  pipelineType = 'feature-scan';
+                  shouldRunFeatureScan = true;
+                  console.log('✅ Auto-detected: Feature Branch Security Scan (Push to feature branch)');
+                }
+              }
+              else if (eventName === 'schedule') {
+                // Determine if this is daily (rescan) or weekly (metrics) based on time
+                const now = new Date();
+                const dayOfWeek = now.getDay(); // 0 = Sunday
+                
+                if (dayOfWeek === 0) { // Sunday - run both
+                  pipelineType = 'both-scheduled';
+                  shouldRunRescan = true;
+                  shouldRunMetrics = true;
+                  console.log('✅ Auto-detected: Both Rescan and Metrics (Sunday schedule)');
+                } else {
+                  pipelineType = 'rescan';
+                  shouldRunRescan = true;
+                  console.log('✅ Auto-detected: Security Rescan Scheduler (Daily schedule)');
+                }
+              }
+              else if (eventName === 'workflow_dispatch') {
+                pipelineType = 'rescan';
+                shouldRunRescan = true;
+                console.log('✅ Auto-detected: Security Rescan Scheduler (Manual trigger)');
+              }
+            }
+            // Explicit scan type selection
+            else {
+              switch (scanType) {
+                case 'feature-scan':
+                  pipelineType = 'feature-scan';
+                  shouldRunFeatureScan = true;
+                  break;
+                case 'main-pipeline':
+                  pipelineType = 'main-pipeline';
+                  shouldRunMainPipeline = true;
+                  break;
+                case 'rescan':
+                  pipelineType = 'rescan';
+                  shouldRunRescan = true;
+                  break;
+                case 'metrics':
+                  pipelineType = 'metrics';
+                  shouldRunMetrics = true;
+                  break;
+                case 'all':
+                  pipelineType = 'all';
+                  shouldRunFeatureScan = eventName === 'pull_request';
+                  shouldRunMainPipeline = eventName === 'push' && targetBranch === 'main';
+                  shouldRunRescan = true;
+                  shouldRunMetrics = true;
+                  break;
+              }
+              console.log('✅ Explicit selection: ' + scanType);
+            }
+            
+            // Context information for downstream jobs
+            const contextInfo = JSON.stringify({
+              repository: repository,
+              event_name: eventName,
+              trigger_type: triggerType,
+              scan_type: scanType,
+              target_branch: targetBranch,
+              timestamp: new Date().toISOString(),
+              dispatcher_run: context.runNumber
+            });
+            
+            // Set outputs
+            core.setOutput('pipeline_type', pipelineType);
+            core.setOutput('should_run_feature_scan', shouldRunFeatureScan);
+            core.setOutput('should_run_main_pipeline', shouldRunMainPipeline);
+            core.setOutput('should_run_rescan', shouldRunRescan);
+            core.setOutput('should_run_metrics', shouldRunMetrics);
+            core.setOutput('context_info', contextInfo);
+            
+            console.log('📊 Pipeline Routing Decision:');
+            console.log('  Pipeline Type:', pipelineType);
+            console.log('  Feature Scan:', shouldRunFeatureScan);
+            console.log('  Main Pipeline:', shouldRunMainPipeline);
+            console.log('  Rescan:', shouldRunRescan);
+            console.log('  Metrics:', shouldRunMetrics);
+
+  feature-branch-scan:
+    needs: determine-pipeline
+    if: needs.determine-pipeline.outputs.should_run_feature_scan == 'true'
+    uses: ./.github/workflows/feature-branch-security-scan.yml
+    secrets:
+      DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
+    with:
+      context_info: ${{ needs.determine-pipeline.outputs.context_info }}
+
+  main-branch-pipeline:
+    needs: determine-pipeline
+    if: needs.determine-pipeline.outputs.should_run_main_pipeline == 'true'
+    uses: ./.github/workflows/main-branch-security-pipeline.yml
+    secrets:
+      DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
+    with:
+      context_info: ${{ needs.determine-pipeline.outputs.context_info }}
+
+  security-rescan:
+    needs: determine-pipeline
+    if: needs.determine-pipeline.outputs.should_run_rescan == 'true'
+    uses: ./.github/workflows/security-rescan-scheduler.yml
+    secrets:
+      DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
+    with:
+      context_info: ${{ needs.determine-pipeline.outputs.context_info }}
+
+  security-metrics:
+    needs: determine-pipeline
+    if: needs.determine-pipeline.outputs.should_run_metrics == 'true'
+    uses: ./.github/workflows/security-metrics-dashboard.yml
+    secrets:
+      DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
+    with:
+      context_info: ${{ needs.determine-pipeline.outputs.context_info }}
+
+  dispatcher-summary:
+    needs: [determine-pipeline, feature-branch-scan, main-branch-pipeline, security-rescan, security-metrics]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Dispatcher Summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pipelineType = '${{ needs.determine-pipeline.outputs.pipeline_type }}';
+            const contextInfo = JSON.parse('${{ needs.determine-pipeline.outputs.context_info }}');
+            
+            console.log('🎯 Security Pipeline Dispatcher Summary');
+            console.log('=====================================');
+            console.log('Repository:', contextInfo.repository);
+            console.log('Pipeline Type:', pipelineType);
+            console.log('Timestamp:', contextInfo.timestamp);
+            console.log('');
+            
+            const jobs = {
+              'feature-branch-scan': '${{ needs.feature-branch-scan.result }}',
+              'main-branch-pipeline': '${{ needs.main-branch-pipeline.result }}', 
+              'security-rescan': '${{ needs.security-rescan.result }}',
+              'security-metrics': '${{ needs.security-metrics.result }}'
+            };
+            
+            console.log('Job Results:');
+            for (const [job, result] of Object.entries(jobs)) {
+              if (result && result !== '') {
+                const status = result === 'success' ? '✅' : result === 'failure' ? '❌' : result === 'skipped' ? '⏭️' : '⚠️';
+                console.log(`  ${status} ${job}: ${result}`);
+              }
+            }
+            
+            console.log('');
+            console.log('🎉 Security Pipeline Dispatcher completed successfully!'); 

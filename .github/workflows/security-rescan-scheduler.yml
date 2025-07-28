@@ -15,6 +15,22 @@ on:
         - full
         - incremental
         - critical-only
+  workflow_call:
+    inputs:
+      context_info:
+        description: 'Context information from dispatcher'
+        required: false
+        type: string
+        default: '{}'
+      rescan_type:
+        description: 'Type of rescan to perform'
+        required: false
+        type: string
+        default: 'full'
+    secrets:
+      DEPENDABOT_PAT:
+        description: 'Personal Access Token for Dependabot API access'
+        required: false
   # Trigger after Dependabot PRs are merged
   pull_request:
     types: [closed]

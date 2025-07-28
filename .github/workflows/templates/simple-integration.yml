@@ -1,0 +1,25 @@
+# Simple Security Integration Template
+# Minimal setup for basic security scanning
+# Copy to .github/workflows/security.yml in your repository
+
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 6 * * *'  # Daily security scan
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  security:
+    uses: YOUR-ORG/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    secrets:
+      DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }} 
