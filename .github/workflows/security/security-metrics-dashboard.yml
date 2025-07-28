@@ -40,6 +40,14 @@ jobs:
         with:
           fetch-depth: 0
           
+      - name: Initialize workflow files
+        run: |
+          # Create missing artifact files early in the workflow to prevent file not found errors
+          [ ! -f "./compliance_status.json" ] && echo '{"status":"unknown","last_scan":"","total_issues":0}' > ./compliance_status.json
+          [ ! -f "./dashboard_summary.json" ] && echo '{"scan_date":"","dependabot_metrics":{},"github_issues_metrics":{},"compliance_summary":{}}' > ./dashboard_summary.json
+          [ ! -f "./trend_analysis.json" ] && echo '{"period":"","summary":{},"performance":{}}' > ./trend_analysis.json
+          echo "✅ Initialized metrics workflow artifact files"
+          
       - name: Set up Python
         uses: actions/setup-python@v4
         with:

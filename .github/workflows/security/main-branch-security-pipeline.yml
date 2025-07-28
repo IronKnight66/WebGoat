@@ -47,6 +47,15 @@ jobs:
         with:
           fetch-depth: 0
           
+      - name: Initialize workflow files
+        run: |
+          # Create missing artifact files early in the workflow to prevent file not found errors
+          [ ! -f "./current_alerts.json" ] && echo '[]' > ./current_alerts.json
+          [ ! -f "./current_scan_results.json" ] && echo '{"scan_date":"'$(date -Iseconds)'","total_vulnerabilities":0,"vulnerabilities":[]}' > ./current_scan_results.json
+          [ ! -f "./new_vulnerabilities.json" ] && echo '[]' > ./new_vulnerabilities.json
+          [ ! -f "./previous_scan_results.json" ] && echo '{"scan_date":"","total_vulnerabilities":0,"vulnerabilities":[]}' > ./previous_scan_results.json
+          echo "✅ Initialized workflow artifact files"
+          
       - name: Set up JDK 23
         uses: actions/setup-java@v4
         with:
@@ -146,7 +155,17 @@ jobs:
             const fs = require('fs');
             
             // Load current vulnerabilities
-            const currentVulns = JSON.parse(fs.readFileSync('./current_alerts.json', 'utf8'));
+            let currentVulns = [];
+            try {
+              if (fs.existsSync('./current_alerts.json')) {
+                currentVulns = JSON.parse(fs.readFileSync('./current_alerts.json', 'utf8'));
+              } else {
+                console.log('⚠️ No current_alerts.json found - this may be the first run');
+              }
+            } catch (error) {
+              console.error('❌ Error reading current_alerts.json:', error.message);
+              console.log('📋 Using empty vulnerability list for comparison');
+            }
             
             // Try to load previous results
             let previousVulns = [];
@@ -205,7 +224,25 @@ jobs:
           github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
           script: |
             const fs = require('fs');
-            const newVulnerabilities = JSON.parse(fs.readFileSync('./new_vulnerabilities.json', 'utf8'));
+            
+            // Load new vulnerabilities with error handling
+            let newVulnerabilities = [];
+            try {
+              if (fs.existsSync('./new_vulnerabilities.json')) {
+                newVulnerabilities = JSON.parse(fs.readFileSync('./new_vulnerabilities.json', 'utf8'));
+              } else {
+                console.error('❌ new_vulnerabilities.json not found');
+                return;
+              }
+            } catch (error) {
+              console.error('❌ Error reading new_vulnerabilities.json:', error.message);
+              return;
+            }
+            
+            if (newVulnerabilities.length === 0) {
+              console.log('ℹ️ No new vulnerabilities to create issues for');
+              return;
+            }
             
             const createdIssues = [];
             
