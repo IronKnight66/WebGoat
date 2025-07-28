@@ -1,7 +1,7 @@
 # Template Security Integration for Other Repositories
 # Copy this file to your repository's .github/workflows/ directory
 # Rename it to something like 'security-pipeline.yml'
-# Update the repository reference to point to your WebGoat repository
+# Update the repository reference to point to your WebGoat repository security folder
 
 name: Security Pipeline Integration
 
@@ -48,7 +48,7 @@ permissions:
 jobs:
   security-pipeline:
     name: Security Pipeline Dispatcher
-    uses: YOUR-ORG/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: YOUR-ORG/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     with:
       trigger_type: 'auto'
       target_branch: ${{ github.ref_name }}

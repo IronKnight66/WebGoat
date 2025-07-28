@@ -30,7 +30,7 @@ uses: YOUR-ORG/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
 
 **Replace with your actual WebGoat repository:**
 ```yaml
-uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
 ```
 
 ### **2. Set Up Personal Access Token (Required)**
@@ -99,7 +99,7 @@ on:
 
 jobs:
   security:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
 ```
@@ -111,7 +111,7 @@ jobs:
 ```yaml
 jobs:
   security-pipeline:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     with:
       trigger_type: 'auto'
       target_branch: ${{ github.ref_name }}
@@ -140,7 +140,7 @@ on:
 
 jobs:
   security:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
 ```
@@ -158,7 +158,7 @@ jobs:
 ```yaml
 jobs:
   security:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     with:
       trigger_type: 'manual'
       target_branch: 'develop'

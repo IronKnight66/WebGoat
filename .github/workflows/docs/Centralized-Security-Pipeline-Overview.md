@@ -25,11 +25,12 @@ This system provides a centralized security pipeline that can be called by multi
 
 ```
 WebGoat/.github/workflows/
-├── security-pipeline-dispatcher.yml          # 🎛️ Central dispatcher
-├── feature-branch-security-scan.yml          # 🔍 PR-level scanning
-├── main-branch-security-pipeline.yml         # 🚀 Post-merge analysis
-├── security-rescan-scheduler.yml             # 🔄 Daily vulnerability tracking
-├── security-metrics-dashboard.yml            # 📊 Weekly compliance reports
+├── security/                                  # 🔒 Security workflows folder
+│   ├── security-pipeline-dispatcher.yml      # 🎛️ Central dispatcher
+│   ├── feature-branch-security-scan.yml      # 🔍 PR-level scanning
+│   ├── main-branch-security-pipeline.yml     # 🚀 Post-merge analysis  
+│   ├── security-rescan-scheduler.yml         # 🔄 Daily vulnerability tracking
+│   └── security-metrics-dashboard.yml        # 📊 Weekly compliance reports
 ├── templates/
 │   ├── other-repo-security-integration.yml   # 📋 Full integration template
 │   └── simple-integration.yml                # 📋 Basic integration template
@@ -75,7 +76,7 @@ Repositories can explicitly specify which pipeline to run:
 ```yaml
 jobs:
   security-pipeline:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     with:
       trigger_type: 'auto'
       target_branch: ${{ github.ref_name }}
@@ -92,7 +93,7 @@ jobs:
 ```yaml
 jobs:
   security:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
 ```
@@ -170,7 +171,7 @@ jobs:
 ```yaml
 jobs:
   security-pipeline:
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
   
@@ -203,7 +204,7 @@ on:
 jobs:
   security-prod:
     if: github.ref == 'refs/heads/main'
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     with:
       scan_type: 'all'  # Comprehensive scanning for production
     secrets:
@@ -211,7 +212,7 @@ jobs:
   
   security-dev:
     if: github.ref != 'refs/heads/main'
-    uses: mycompany/webgoat/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: mycompany/webgoat/.github/workflows/security/security-pipeline-dispatcher.yml@main
     with:
       scan_type: 'feature-scan'  # Lighter scanning for development
     secrets:
