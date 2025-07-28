@@ -1,7 +1,7 @@
-# Template Security Integration for Other Repositories
-# Copy this file to your repository's .github/workflows/ directory
-# Rename it to something like 'security-pipeline.yml'
-# This template references: IronKnight66/ApplicationSecurityPipeline
+# Local Security Pipeline Integration
+# This workflow calls the local security pipeline dispatcher
+# Located in the same repository under .github/workflows/security/
+# Uses the centralized security workflows from this repository
 
 name: Security Pipeline Integration
 
@@ -40,7 +40,7 @@ permissions:
 jobs:
   security-pipeline:
     name: Security Pipeline Dispatcher
-    uses: IronKnight66/ApplicationSecurityPipeline/.github/workflows/security-pipeline-dispatcher.yml@main
+    uses: ./.github/workflows/security/security-pipeline-dispatcher.yml
     with:
       trigger_type: 'auto'
       target_branch: ${{ github.ref_name }}
