@@ -48,7 +48,7 @@ permissions:
 jobs:
   security-pipeline:
     name: Security Pipeline Dispatcher
-    uses: IronKnight66/ApplicationSecurityPipeline/.github/workflows/security/security-pipeline-dispatcher.yml@main
+    uses: IronKnight66/ApplicationSecurityPipeline/.github/workflows/security-pipeline-dispatcher.yml@main
     with:
       trigger_type: 'auto'
       target_branch: ${{ github.ref_name }}

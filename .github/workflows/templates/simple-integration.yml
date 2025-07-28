@@ -21,6 +21,6 @@ permissions:
 
 jobs:
   security:
-    uses: IronKnight66/ApplicationSecurityPipeline/.github/workflows/security/security-pipeline-dispatcher.yml@main
+    uses: IronKnight66/ApplicationSecurityPipeline/.github/workflows/security-pipeline-dispatcher.yml@main
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }} 
