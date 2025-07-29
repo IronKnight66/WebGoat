@@ -170,7 +170,7 @@ jobs:
   feature-branch-scan:
     needs: determine-pipeline
     if: needs.determine-pipeline.outputs.should_run_feature_scan == 'true'
-    uses: ./.github/workflows/feature-branch-security-scan.yml
+    uses: ./.github/workflows/security/feature-branch-security-scan.yml
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
     with:
@@ -179,7 +179,7 @@ jobs:
   main-branch-pipeline:
     needs: determine-pipeline
     if: needs.determine-pipeline.outputs.should_run_main_pipeline == 'true'
-    uses: ./.github/workflows/main-branch-security-pipeline.yml
+    uses: ./.github/workflows/security/main-branch-security-pipeline.yml
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
     with:
@@ -188,7 +188,7 @@ jobs:
   security-rescan:
     needs: determine-pipeline
     if: needs.determine-pipeline.outputs.should_run_rescan == 'true'
-    uses: ./.github/workflows/security-rescan-scheduler.yml
+    uses: ./.github/workflows/security/security-rescan-scheduler.yml
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
     with:
@@ -197,7 +197,7 @@ jobs:
   security-metrics:
     needs: determine-pipeline
     if: needs.determine-pipeline.outputs.should_run_metrics == 'true'
-    uses: ./.github/workflows/security-metrics-dashboard.yml
+    uses: ./.github/workflows/security/security-metrics-dashboard.yml
     secrets:
       DEPENDABOT_PAT: ${{ secrets.DEPENDABOT_PAT }}
     with:
