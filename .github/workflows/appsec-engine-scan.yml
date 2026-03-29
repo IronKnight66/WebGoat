@@ -53,6 +53,20 @@ on:
           - high
           - medium
           - low
+      use_llm_fixes:
+        description: 'Generate LLM fixes and open a single auto-fix PR (requires APPSEC_ANTHROPIC_API_KEY secret)'
+        required: false
+        default: false
+        type: boolean
+      fix_severity:
+        description: 'Severities to generate LLM fixes for'
+        required: false
+        default: 'critical,high'
+        type: choice
+        options:
+          - 'critical'
+          - 'critical,high'
+          - 'critical,high,medium'
 
 permissions:
   contents: read
@@ -561,3 +575,83 @@ jobs:
                "Review the SARIF results in the Security tab and the" \
                "compliance report artifact before merging."
           exit 1
+
+  # =========================================================================
+  # Auto-fix job: scan + LLM fix generation + single PR
+  #
+  # Only runs when triggered via workflow_dispatch with use_llm_fixes=true.
+  # Requires the APPSEC_ANTHROPIC_API_KEY secret to be set in the repository.
+  #
+  # Flow:
+  #   1. Scan the codebase
+  #   2. Call Claude to generate CodeFix objects for high/critical findings
+  #   3. Apply all fixes, commit to a timestamped branch, push, open one PR
+  # =========================================================================
+  appsec-engine-autofix:
+    name: AppSec Engine — LLM Auto-Fix PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.use_llm_fixes == true
+
+    permissions:
+      contents: write        # push the fix branch
+      pull-requests: write   # create the PR
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Install appsec-engine with the [llm] extra so the Anthropic SDK is available
+      - name: Install AppSec Engine (with LLM support)
+        env:
+          GH_PAT: ${{ secrets.APPSEC_ENGINE_PAT }}
+        run: |
+          pip install "git+https://${GH_PAT}@github.com/IronKnight66/appsec-engine.git[llm]"
+
+      - name: Install security scanning tools
+        run: |
+          pip install semgrep bandit safety pip-audit
+
+      # Configure git identity so appsec-engine can commit the fixes
+      - name: Configure git identity
+        run: |
+          git config user.name  "appsec-engine[bot]"
+          git config user.email "appsec-engine[bot]@users.noreply.github.com"
+
+      # Run scan, generate LLM fixes, apply them, and open one PR.
+      #
+      # Flags:
+      #   --pr              create a PR (implies --fix --commit --llm)
+      #   --llm             call the LLM to generate fixes
+      #   --fix-severity    which severities to fix (from workflow_dispatch input)
+      #   --fix-limit 10    cap at 10 LLM calls per run to control cost
+      #   --ci-mode         non-interactive
+      #   --no-cache        always do a fresh scan
+      #   --fail-on low     do not gate the job on findings — we want the PR
+      #                     to be created even when findings exist
+      - name: Run AppSec Engine scan + auto-fix
+        id: autofix
+        env:
+          APPSEC_ANTHROPIC_API_KEY: ${{ secrets.APPSEC_ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FIX_SEV="${{ inputs.fix_severity || 'critical,high' }}"
+
+          appsec scan . \
+            --pr \
+            --llm \
+            --fix-severity "${FIX_SEV}" \
+            --fix-limit 10 \
+            --ci-mode \
+            --no-cache \
+            --format text \
+            --fail-on low \
+            --verbose
+
