@@ -1,3 +1,22 @@
+      - name: Run AppSec Engine scan + auto-fix
+        id: autofix
+        env:
+          APPSEC_ANTHROPIC_API_KEY: ${{ secrets.APPSEC_ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIX_SEVERITY: ${{ inputs.fix_severity || 'critical,high' }}
+        run: |
+          FIX_SEV="${FIX_SEVERITY}"
+
+          appsec scan . \
+            --pr \
+            --llm \
+            --fix-severity "${FIX_SEV}" \
+            --fix-limit 10 \
+            --ci-mode \
+            --no-cache \
+            --format text \
+            --fail-on low \
+            --verbose
 name: AppSec Engine Security Scan
 
 # Runs appsec-engine (https://github.com/IronKnight66/appsec-engine) against

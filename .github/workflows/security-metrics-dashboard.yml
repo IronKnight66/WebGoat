@@ -1,4 +1,152 @@
-name: Security Metrics Dashboard
+      - name: Collect security metrics data
+        id: collect-metrics
+        uses: actions/github-script@v7
+        env:
+          TIME_PERIOD: ${{ github.event.inputs.time_period || 30 }}
+        with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
+          script: |
+            const fs = require('fs');
+            const timePeriodDays = parseInt(process.env.TIME_PERIOD);
+            const cutoffDate = new Date(Date.now() - (timePeriodDays * 24 * 60 * 60 * 1000));
+            
+            // Collect security issues data
+            const securityIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security',
+              state: 'all',
+              since: cutoffDate.toISOString(),
+              per_page: 100
+            });
+            
+            // Collect vulnerability issues specifically
+            const vulnIssues = securityIssues.data.filter(issue => 
+              issue.title.startsWith('[SECURITY]') && 
+              issue.labels.some(label => label.name === 'vulnerability')
+            );
+            
+            // Get current Dependabot alerts for additional context
+            let dependabotAlerts = [];
+            try {
+              const alerts = await github.rest.dependabot.listAlertsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100
+              });
+              dependabotAlerts = alerts.data;
+            } catch (error) {
+              console.log('Could not fetch Dependabot alerts:', error.message);
+            }
+            
+            // Categorize by severity and status
+            const metrics = {
+              total_security_issues: vulnIssues.length,
+              open_issues: vulnIssues.filter(issue => issue.state === 'open').length,
+              closed_issues: vulnIssues.filter(issue => issue.state === 'closed').length,
+              current_dependabot_alerts: dependabotAlerts.length,
+              by_severity: {
+                critical: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'critical')).length,
+                high: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'high')).length,
+                medium: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'medium')).length,
+                low: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'low')).length
+              },
+              dependabot_by_severity: {
+                critical: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'critical').length,
+                high: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'high').length,
+                medium: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'medium').length,
+                low: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'low').length
+              },
+              by_status: {
+                open_critical: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'critical')
+                ).length,
+                open_high: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'high')
+                ).length,
+                open_medium: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'medium')
+                ).length,
+                overdue: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'overdue')
+                ).length
+              },
+              resolution_times: []
+            };
+            
+            // Calculate resolution times for closed issues
+            for (const issue of vulnIssues.filter(i => i.state === 'closed')) {
+              const created = new Date(issue.created_at);
+              const closed = new Date(issue.closed_at);
+              const resolutionHours = (closed - created) / (1000 * 60 * 60);
+              
+              metrics.resolution_times.push({
+                issue_number: issue.number,
+                cve: issue.title.match(/CVE-\d{4}-\d+/)?.[0] || issue.title.match(/GHSA-[a-z0-9-]+/)?.[0] || 'Unknown',
+                severity: issue.labels.find(l => ['critical', 'high', 'medium', 'low'].includes(l.name))?.name || 'unknown',
+                resolution_hours: Math.round(resolutionHours),
+                resolution_days: Math.round(resolutionHours / 24)
+              });
+            }
+            
+            // Calculate MTTR (Mean Time To Resolution)
+            if (metrics.resolution_times.length > 0) {
+              const totalHours = metrics.resolution_times.reduce((sum, item) => sum + item.resolution_hours, 0);
+              metrics.mttr_hours = Math.round(totalHours / metrics.resolution_times.length);
+              metrics.mttr_days = Math.round(metrics.mttr_hours / 24);
+            } else {
+              metrics.mttr_hours = 0;
+              metrics.mttr_days = 0;
+            }
+            
+            // Get workflow run data for MTTD calculation
+            const workflowRuns = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              created: `>=${cutoffDate.toISOString().split('T')[0]}`,
+              per_page: 100
+            });
+            
+            const securityWorkflowRuns = workflowRuns.data.workflow_runs.filter(run => 
+              run.name.includes('Security') || run.name.includes('security') || run.name.includes('Dependabot')
+            );
+            
+            metrics.workflow_stats = {
+              total_security_scans: securityWorkflowRuns.length,
+              successful_scans: securityWorkflowRuns.filter(run => run.conclusion === 'success').length,
+              failed_scans: securityWorkflowRuns.filter(run => run.conclusion === 'failure').length,
+              scan_frequency: securityWorkflowRuns.length / timePeriodDays
+            };
+            
+            // Add Dependabot-specific metrics
+            metrics.dependabot_stats = {
+              total_alerts: dependabotAlerts.length,
+              ecosystem_breakdown: {},
+              age_distribution: []
+            };
+            
+            // Analyze Dependabot alerts by ecosystem
+            for (const alert of dependabotAlerts) {
+              const ecosystem = alert.dependency.package.ecosystem;
+              metrics.dependabot_stats.ecosystem_breakdown[ecosystem] = 
+                (metrics.dependabot_stats.ecosystem_breakdown[ecosystem] || 0) + 1;
+              
+              // Calculate alert age
+              const ageInDays = Math.floor((Date.now() - new Date(alert.created_at)) / (1000 * 60 * 60 * 24));
+              metrics.dependabot_stats.age_distribution.push(ageInDays);
+            }
+            
+            // Save metrics data
+            fs.writeFileSync('./security_metrics.json', JSON.stringify(metrics, null, 2));
+            
+            console.log(`Collected metrics for ${timePeriodDays} days:`);
+            console.log(`- Total security issues: ${metrics.total_security_issues}`);
+            console.log(`- Open issues: ${metrics.open_issues}`);
+            console.log(`- Current Dependabot alerts: ${metrics.current_dependabot_alerts}`);
+            console.log(`- MTTR: ${metrics.mttr_days} days`);
+            
+            return metrics;name: Security Metrics Dashboard
 
 on:
   schedule:

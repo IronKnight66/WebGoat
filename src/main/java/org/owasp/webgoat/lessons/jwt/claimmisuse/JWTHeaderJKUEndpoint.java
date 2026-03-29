@@ -1,4 +1,8 @@
-/*
+        var jwkProviderUrl = new URL(jku.asString());
+        if (!"localhost".equals(jwkProviderUrl.getHost()) && !jwkProviderUrl.getHost().endsWith(".webgoat.org")) {
+          return failed(this).feedback("jwt-invalid-token").build();
+        }
+        var jwkProvider = new JwkProviderBuilder(jwkProviderUrl).build();/*
  * SPDX-FileCopyrightText: Copyright © 2023 WebGoat authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
