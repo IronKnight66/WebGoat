@@ -611,12 +611,14 @@ jobs:
       contents: write        # push the fix branch
       pull-requests: write   # create the PR
       security-events: write
+      workflows: write       # push changes to workflow files
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.APPSEC_ENGINE_PAT }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
