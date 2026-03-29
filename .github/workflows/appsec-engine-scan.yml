@@ -634,11 +634,14 @@ jobs:
         run: |
           pip install semgrep bandit safety pip-audit
 
-      # Configure git identity so appsec-engine can commit the fixes
+      # Configure git identity and auth so appsec-engine can commit and push
       - name: Configure git identity
+        env:
+          GH_PAT: ${{ secrets.APPSEC_ENGINE_PAT }}
         run: |
           git config user.name  "appsec-engine[bot]"
           git config user.email "appsec-engine[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}.git"
 
       # Run scan, generate LLM fixes, apply them, and open one PR.
       #
