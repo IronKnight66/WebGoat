@@ -162,7 +162,101 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # 7. Upload SARIF to GitHub Code Scanning.
+      # 7. Publish a rich findings summary to the GitHub Actions job summary
+      #    page so results are visible directly in the Actions UI without
+      #    needing to download any artifact.
+      # -----------------------------------------------------------------------
+      - name: Publish findings summary
+        if: always()
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          sarif_path = "appsec-results.sarif"
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
+
+          try:
+              with open(sarif_path) as f:
+                  sarif = json.load(f)
+          except Exception as e:
+              with open(summary_path, "a") as out:
+                  out.write(f"## AppSec Engine Scan\n\n> Could not parse SARIF: {e}\n")
+              sys.exit(0)
+
+          total = error = warning = note = 0
+          tool_counts = {}
+          high_findings = []
+
+          for run in sarif.get("runs", []):
+              tool = run.get("tool", {}).get("driver", {}).get("name", "unknown")
+              run_count = 0
+              for result in run.get("results", []):
+                  total += 1
+                  run_count += 1
+                  level = result.get("level", "warning")
+                  if level == "error":   error += 1
+                  elif level == "note":  note += 1
+                  else:                  warning += 1
+                  if level == "error":
+                      loc = result.get("locations", [{}])[0]
+                      phys = loc.get("physicalLocation", {})
+                      uri = phys.get("artifactLocation", {}).get("uri", "?")
+                      line = phys.get("region", {}).get("startLine", "?")
+                      msg = result.get("message", {}).get("text", "")[:120]
+                      high_findings.append((tool, uri, line, msg))
+              tool_counts[tool] = run_count
+
+          status = "FINDINGS DETECTED" if total > 0 else "CLEAN"
+          icon = "🔴" if error > 0 else ("🟡" if warning > 0 else "✅")
+
+          lines = [
+              f"## {icon} AppSec Engine Security Scan — {status}",
+              "",
+              "### Summary",
+              "",
+              "| Severity | Count |",
+              "|----------|-------|",
+              f"| 🔴 Critical / High | {error} |",
+              f"| 🟡 Medium | {warning} |",
+              f"| 🔵 Low / Info | {note} |",
+              f"| **Total** | **{total}** |",
+              "",
+              "### Results by Tool",
+              "",
+              "| Tool | Findings |",
+              "|------|----------|",
+          ]
+          for tool, count in sorted(tool_counts.items()):
+              lines.append(f"| {tool} | {count} |")
+
+          if high_findings:
+              lines += [
+                  "",
+                  "### High / Critical Findings (first 20)",
+                  "",
+                  "| Tool | File | Line | Description |",
+                  "|------|------|------|-------------|",
+              ]
+              for tool, uri, line, msg in high_findings[:20]:
+                  safe_msg = msg.replace("|", "\\|").replace("\n", " ")
+                  lines.append(f"| {tool} | `{uri}` | {line} | {safe_msg} |")
+              if len(high_findings) > 20:
+                  lines.append(f"\n> _...and {len(high_findings) - 20} more high/critical findings. Download the compliance report artifact for the full list._")
+
+          lines += [
+              "",
+              "---",
+              "_Download the **compliance report** and **SARIF** artifacts from this run for full details._",
+          ]
+
+          with open(summary_path, "a") as out:
+              out.write("\n".join(lines) + "\n")
+
+          print(f"Summary written: {total} total findings ({error} high/critical, {warning} medium, {note} low)")
+          PYEOF
+
+      # -----------------------------------------------------------------------
+      # 8. Upload SARIF to GitHub Code Scanning.
       #    continue-on-error: true — Code Scanning may not be enabled on all
       #    forks or private repos; we don't want to mask the real scan result.
       # -----------------------------------------------------------------------
@@ -175,7 +269,7 @@ jobs:
           category: appsec-engine
 
       # -----------------------------------------------------------------------
-      # 8. Persist compliance report as a workflow artifact (90-day retention
+      # 9. Persist compliance report as a workflow artifact (90-day retention
       #    matches the audit-trail retention in the appsec-engine own workflow).
       # -----------------------------------------------------------------------
       - name: Upload compliance report artifact
@@ -187,7 +281,7 @@ jobs:
           retention-days: 90
 
       # -----------------------------------------------------------------------
-      # 9. Persist raw SARIF as a fallback artifact (useful when Code Scanning
+      # 10. Persist raw SARIF as a fallback artifact (useful when Code Scanning
       #    is not enabled on the repo).
       # -----------------------------------------------------------------------
       - name: Upload SARIF results artifact
@@ -199,7 +293,7 @@ jobs:
           retention-days: 30
 
       # -----------------------------------------------------------------------
-      # 10. Post a summary comment on pull requests.
+      # 11. Post a summary comment on pull requests.
       # -----------------------------------------------------------------------
       - name: Comment on pull request with scan summary
         if: github.event_name == 'pull_request'
@@ -275,7 +369,7 @@ jobs:
             });
 
       # -----------------------------------------------------------------------
-      # 11. Enforce the security gate AFTER all artifacts have been saved.
+      # 12. Enforce the security gate AFTER all artifacts have been saved.
       #     This step re-fails the job when the scan found issues, so the
       #     branch protection rule correctly blocks the merge.
       # -----------------------------------------------------------------------
