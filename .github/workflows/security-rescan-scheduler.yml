@@ -1,4 +1,24 @@
-name: Security Rescan Scheduler
+      - name: Determine scan scope
+        id: scan-scope
+        env:
+          RESCAN_TYPE_INPUT: ${{ github.event.inputs.rescan_type }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          RESCAN_TYPE="${RESCAN_TYPE_INPUT:-full}"
+          
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            RESCAN_TYPE="incremental"
+          elif [ "$EVENT_NAME" = "schedule" ]; then
+            # Weekly full scan on Sundays, daily incremental otherwise
+            if [ $(date +%u) -eq 7 ]; then
+              RESCAN_TYPE="full"
+            else
+              RESCAN_TYPE="incremental"
+            fi
+          fi
+          
+          echo "scan_type=$RESCAN_TYPE" >> $GITHUB_OUTPUT
+          echo "Running $RESCAN_TYPE Dependabot rescan"name: Security Rescan Scheduler
 
 on:
   schedule:

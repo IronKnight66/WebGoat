@@ -1,4 +1,268 @@
-name: Security Metrics Dashboard
+          python3 -c "
+          import json
+          import matplotlib.pyplot as plt
+          import seaborn as sns
+          import pandas as pd
+          from datetime import datetime, timedelta
+          import os
+          
+          # Load metrics data
+          with open('./security_metrics.json', 'r') as f:
+              metrics = json.load(f)
+          
+          # Set style for better looking charts
+          plt.style.use('seaborn-v0_8')
+          sns.set_palette('husl')
+          
+          # Create dashboard figures
+          fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+          fig.suptitle('WebGoat Security Metrics Dashboard', fontsize=20, fontweight='bold')
+          
+          # 1. Security Issues by Severity (Pie Chart)
+          severity_data = metrics['by_severity']
+          severity_labels = []
+          severity_values = []
+          severity_colors = {'critical': '#FF4444', 'high': '#FF8800', 'medium': '#FFCC00', 'low': '#44AA44'}
+          
+          for severity, count in severity_data.items():
+              if count > 0:
+                  severity_labels.append(f'{severity.title()} ({count})')
+                  severity_values.append(count)
+          
+          if severity_values:
+              ax1.pie(severity_values, labels=severity_labels, autopct='%1.1f%%', startangle=90)
+          else:
+              ax1.text(0.5, 0.5, 'No vulnerabilities found', ha='center', va='center', transform=ax1.transAxes)
+          ax1.set_title('Vulnerabilities by Severity', fontweight='bold')
+          
+          # 2. Open vs Closed Issues (Bar Chart)
+          status_labels = ['Open', 'Closed']
+          status_values = [metrics['open_issues'], metrics['closed_issues']]
+          colors = ['#FF6B6B', '#4ECDC4']
+          
+          bars = ax2.bar(status_labels, status_values, color=colors)
+          ax2.set_title('Issue Status Overview', fontweight='bold')
+          ax2.set_ylabel('Number of Issues')
+          
+          # Add value labels on bars
+          for bar in bars:
+              height = bar.get_height()
+              ax2.text(bar.get_x() + bar.get_width()/2., height,
+                      f'{int(height)}', ha='center', va='bottom')
+          
+          # 3. Resolution Time Distribution
+          if metrics['resolution_times']:
+              resolution_days = [item['resolution_days'] for item in metrics['resolution_times']]
+              ax3.hist(resolution_days, bins=10, color='skyblue', edgecolor='black', alpha=0.7)
+              ax3.axvline(metrics['mttr_days'], color='red', linestyle='--', 
+                         label=f'MTTR: {metrics[\"mttr_days\"]} days')
+              ax3.set_xlabel('Resolution Time (Days)')
+              ax3.set_ylabel('Number of Issues')
+              ax3.set_title('Resolution Time Distribution', fontweight='bold')
+              ax3.legend()
+          else:
+              ax3.text(0.5, 0.5, 'No resolution data available', ha='center', va='center', transform=ax3.transAxes)
+              ax3.set_title('Resolution Time Distribution', fontweight='bold')
+          
+          # 4. Security Scan Success Rate
+          workflow_stats = metrics['workflow_stats']
+          total_scans = workflow_stats['total_security_scans']
+          
+          if total_scans > 0:
+              success_rate = (workflow_stats['successful_scans'] / total_scans) * 100
+              
+              # Create a gauge-like visualization
+              categories = ['Successful', 'Failed']
+              values = [workflow_stats['successful_scans'], workflow_stats['failed_scans']]
+              colors = ['#2ECC71', '#E74C3C']
+              
+              wedges, texts, autotexts = ax4.pie(values, labels=categories, autopct='%1.1f%%', 
+                                               colors=colors, startangle=90)
+              
+              # Add success rate in the center
+              ax4.text(0, 0, f'{success_rate:.1f}%\nSuccess Rate', 
+                      ha='center', va='center', fontsize=14, fontweight='bold')
+          else:
+              ax4.text(0.5, 0.5, 'No scan data available', ha='center', va='center', transform=ax4.transAxes)
+              
+          ax4.set_title('Security Scan Success Rate', fontweight='bold')
+          
+          plt.tight_layout()
+          plt.savefig('./security_dashboard.png', dpi=300, bbox_inches='tight')
+          plt.close()
+          
+          # Generate summary statistics
+          import os
+          time_period = int(os.environ.get('TIME_PERIOD', '30'))
+          summary_stats = {
+              'generated_at': datetime.now().isoformat(),
+              'period_days': time_period,
+              'total_vulnerabilities': metrics['total_security_issues'],
+              'open_vulnerabilities': metrics['open_issues'],
+              'critical_open': metrics['by_status']['open_critical'],
+              'high_open': metrics['by_status']['open_high'],
+              'overdue_issues': metrics['by_status']['overdue'],
+              'mttr_days': metrics['mttr_days'],
+              'scan_success_rate': round((workflow_stats['successful_scans'] / max(workflow_stats['total_security_scans'], 1)) * 100, 1),
+              'avg_scans_per_day': round(workflow_stats['scan_frequency'], 2)
+          }
+          
+          with open('./dashboard_summary.json', 'w') as f:
+              json.dump(summary_stats, f, indent=2)
+          
+          print('Dashboard generated successfully!')
+          print(f'Total vulnerabilities in last {summary_stats[\"period_days\"]} days: {summary_stats[\"total_vulnerabilities\"]}')
+          print(f'Currently open: {summary_stats[\"open_vulnerabilities\"]}')
+          print(f'Mean Time to Resolution: {summary_stats[\"mttr_days\"]} days')
+          "      - name: Collect security metrics data
+        id: collect-metrics
+        uses: actions/github-script@v7
+        env:
+          TIME_PERIOD: ${{ github.event.inputs.time_period || 30 }}
+        with:
+          github-token: ${{ secrets.DEPENDABOT_PAT || github.token }}
+          script: |
+            const fs = require('fs');
+            const timePeriodDays = parseInt(process.env.TIME_PERIOD);
+            const cutoffDate = new Date(Date.now() - (timePeriodDays * 24 * 60 * 60 * 1000));
+            
+            // Collect security issues data
+            const securityIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security',
+              state: 'all',
+              since: cutoffDate.toISOString(),
+              per_page: 100
+            });
+            
+            // Collect vulnerability issues specifically
+            const vulnIssues = securityIssues.data.filter(issue => 
+              issue.title.startsWith('[SECURITY]') && 
+              issue.labels.some(label => label.name === 'vulnerability')
+            );
+            
+            // Get current Dependabot alerts for additional context
+            let dependabotAlerts = [];
+            try {
+              const alerts = await github.rest.dependabot.listAlertsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100
+              });
+              dependabotAlerts = alerts.data;
+            } catch (error) {
+              console.log('Could not fetch Dependabot alerts:', error.message);
+            }
+            
+            // Categorize by severity and status
+            const metrics = {
+              total_security_issues: vulnIssues.length,
+              open_issues: vulnIssues.filter(issue => issue.state === 'open').length,
+              closed_issues: vulnIssues.filter(issue => issue.state === 'closed').length,
+              current_dependabot_alerts: dependabotAlerts.length,
+              by_severity: {
+                critical: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'critical')).length,
+                high: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'high')).length,
+                medium: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'medium')).length,
+                low: vulnIssues.filter(issue => issue.labels.some(l => l.name === 'low')).length
+              },
+              dependabot_by_severity: {
+                critical: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'critical').length,
+                high: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'high').length,
+                medium: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'medium').length,
+                low: dependabotAlerts.filter(alert => alert.security_advisory.severity === 'low').length
+              },
+              by_status: {
+                open_critical: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'critical')
+                ).length,
+                open_high: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'high')
+                ).length,
+                open_medium: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'medium')
+                ).length,
+                overdue: vulnIssues.filter(issue => 
+                  issue.state === 'open' && issue.labels.some(l => l.name === 'overdue')
+                ).length
+              },
+              resolution_times: []
+            };
+            
+            // Calculate resolution times for closed issues
+            for (const issue of vulnIssues.filter(i => i.state === 'closed')) {
+              const created = new Date(issue.created_at);
+              const closed = new Date(issue.closed_at);
+              const resolutionHours = (closed - created) / (1000 * 60 * 60);
+              
+              metrics.resolution_times.push({
+                issue_number: issue.number,
+                cve: issue.title.match(/CVE-\d{4}-\d+/)?.[0] || issue.title.match(/GHSA-[a-z0-9-]+/)?.[0] || 'Unknown',
+                severity: issue.labels.find(l => ['critical', 'high', 'medium', 'low'].includes(l.name))?.name || 'unknown',
+                resolution_hours: Math.round(resolutionHours),
+                resolution_days: Math.round(resolutionHours / 24)
+              });
+            }
+            
+            // Calculate MTTR (Mean Time To Resolution)
+            if (metrics.resolution_times.length > 0) {
+              const totalHours = metrics.resolution_times.reduce((sum, item) => sum + item.resolution_hours, 0);
+              metrics.mttr_hours = Math.round(totalHours / metrics.resolution_times.length);
+              metrics.mttr_days = Math.round(metrics.mttr_hours / 24);
+            } else {
+              metrics.mttr_hours = 0;
+              metrics.mttr_days = 0;
+            }
+            
+            // Get workflow run data for MTTD calculation
+            const workflowRuns = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              created: `>=${cutoffDate.toISOString().split('T')[0]}`,
+              per_page: 100
+            });
+            
+            const securityWorkflowRuns = workflowRuns.data.workflow_runs.filter(run => 
+              run.name.includes('Security') || run.name.includes('security') || run.name.includes('Dependabot')
+            );
+            
+            metrics.workflow_stats = {
+              total_security_scans: securityWorkflowRuns.length,
+              successful_scans: securityWorkflowRuns.filter(run => run.conclusion === 'success').length,
+              failed_scans: securityWorkflowRuns.filter(run => run.conclusion === 'failure').length,
+              scan_frequency: securityWorkflowRuns.length / timePeriodDays
+            };
+            
+            // Add Dependabot-specific metrics
+            metrics.dependabot_stats = {
+              total_alerts: dependabotAlerts.length,
+              ecosystem_breakdown: {},
+              age_distribution: []
+            };
+            
+            // Analyze Dependabot alerts by ecosystem
+            for (const alert of dependabotAlerts) {
+              const ecosystem = alert.dependency.package.ecosystem;
+              metrics.dependabot_stats.ecosystem_breakdown[ecosystem] = 
+                (metrics.dependabot_stats.ecosystem_breakdown[ecosystem] || 0) + 1;
+              
+              // Calculate alert age
+              const ageInDays = Math.floor((Date.now() - new Date(alert.created_at)) / (1000 * 60 * 60 * 24));
+              metrics.dependabot_stats.age_distribution.push(ageInDays);
+            }
+            
+            // Save metrics data
+            fs.writeFileSync('./security_metrics.json', JSON.stringify(metrics, null, 2));
+            
+            console.log(`Collected metrics for ${timePeriodDays} days:`);
+            console.log(`- Total security issues: ${metrics.total_security_issues}`);
+            console.log(`- Open issues: ${metrics.open_issues}`);
+            console.log(`- Current Dependabot alerts: ${metrics.current_dependabot_alerts}`);
+            console.log(`- MTTR: ${metrics.mttr_days} days`);
+            
+            return metrics;name: Security Metrics Dashboard
 
 on:
   schedule:

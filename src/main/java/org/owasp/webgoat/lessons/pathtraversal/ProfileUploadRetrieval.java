@@ -1,4 +1,12 @@
-/*
+      var id = request.getParameter("id");
+      var sanitizedId = id == null ? String.valueOf(RandomUtils.nextInt(1, 11)) : org.apache.commons.io.FilenameUtils.getName(id);
+      var catPicture =
+          new File(catPicturesDirectory, sanitizedId + ".jpg");
+
+      // Verify the canonical path is within the expected directory
+      if (!catPicture.getCanonicalPath().startsWith(new File(catPicturesDirectory).getCanonicalPath())) {
+        return ResponseEntity.badRequest().body("Invalid file path");
+      }/*
  * SPDX-FileCopyrightText: Copyright © 2020 WebGoat authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
