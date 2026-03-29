@@ -1,4 +1,12 @@
-/*
+      PreparedStatement statement =
+          connection.prepareStatement(
+              "select password from challenge_users where userid = ? and password = ?");
+      statement.setString(1, username_login);
+      statement.setString(2, password_login);PreparedStatement statement =
+          connection.prepareStatement(
+              "select password from challenge_users where userid = ? and password = ?");
+      statement.setString(1, username_login);
+      statement.setString(2, password_login);/*
  * SPDX-FileCopyrightText: Copyright © 2017 WebGoat authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
