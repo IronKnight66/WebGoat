@@ -659,7 +659,7 @@ jobs:
         id: autofix
         env:
           APPSEC_ANTHROPIC_API_KEY: ${{ secrets.APPSEC_ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.APPSEC_ENGINE_PAT }}
         run: |
           FIX_SEV="${{ inputs.fix_severity || 'critical,high' }}"
 
