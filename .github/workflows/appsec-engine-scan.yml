@@ -1,4 +1,4 @@
-name: AppSec Engine Security Scan
+          FIX_SEV="${FIX_SEVERITY}"name: AppSec Engine Security Scan
 
 # Runs appsec-engine (https://github.com/IronKnight66/appsec-engine) against
 # the WebGoat codebase on every push and pull request to main/master, and on

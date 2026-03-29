@@ -1,4 +1,11 @@
-/*
+        var jku = decodedJWT.getHeaderClaim("jku");
+        var jkuUrl = new URL(jku.asString());
+        var allowedHost = "localhost";
+        var allowedPort = 8080;
+        if (!allowedHost.equals(jkuUrl.getHost()) || (jkuUrl.getPort() != allowedPort && jkuUrl.getPort() != -1)) {
+          return failed(this).feedback("jwt-invalid-token").build();
+        }
+        var jwkProvider = new JwkProviderBuilder(jkuUrl).build();/*
  * SPDX-FileCopyrightText: Copyright © 2023 WebGoat authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
