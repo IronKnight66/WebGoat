@@ -628,7 +628,7 @@ jobs:
         env:
           GH_PAT: ${{ secrets.APPSEC_ENGINE_PAT }}
         run: |
-          pip install "git+https://${GH_PAT}@github.com/IronKnight66/appsec-engine.git[llm]"
+          pip install "appsec-engine[llm] @ git+https://${GH_PAT}@github.com/IronKnight66/appsec-engine.git"
 
       - name: Install security scanning tools
         run: |
