@@ -196,11 +196,11 @@ jobs:
       - name: Determine scan scope
         id: scan-scope
         run: |
-          RESCAN_TYPE="${{ github.event.inputs.rescan_type || 'full' }}"
+          RESCAN_TYPE="${INPUT_RESCAN_TYPE:-full}"
           
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "$EVENT_NAME" = "pull_request" ]; then
             RESCAN_TYPE="incremental"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
+          elif [ "$EVENT_NAME" = "schedule" ]; then
             # Weekly full scan on Sundays, daily incremental otherwise
             if [ $(date +%u) -eq 7 ]; then
               RESCAN_TYPE="full"
@@ -212,6 +212,10 @@ jobs:
           echo "scan_type=$RESCAN_TYPE" >> $GITHUB_OUTPUT
           echo "Running $RESCAN_TYPE Dependabot rescan"
           
+        env:
+          INPUT_RESCAN_TYPE: ${{ github.event.inputs.rescan_type }}
+          EVENT_NAME: ${{ github.event_name }}
+
       - name: Build project for dependency analysis
         run: |
           mvn clean compile -DskipTests
