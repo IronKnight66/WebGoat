@@ -657,6 +657,7 @@ jobs:
       #                     to be created even when findings exist
       - name: Run AppSec Engine scan + auto-fix
         id: autofix
+        continue-on-error: true   # exit code reflects findings, not job failure
         env:
           APPSEC_ANTHROPIC_API_KEY: ${{ secrets.APPSEC_ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.APPSEC_ENGINE_PAT }}
