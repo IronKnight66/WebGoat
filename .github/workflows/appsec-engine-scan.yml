@@ -38,11 +38,27 @@ on:
           - high
           - medium
           - low
+      create_issues:
+        description: 'Open GitHub issues for findings'
+        required: false
+        default: false
+        type: boolean
+      issue_severity:
+        description: 'Minimum severity to open issues for'
+        required: false
+        default: 'high'
+        type: choice
+        options:
+          - critical
+          - high
+          - medium
+          - low
 
 permissions:
   contents: read
   security-events: write   # required to upload SARIF to GitHub Code Scanning
   pull-requests: write     # required to post PR comments
+  issues: write            # required to create/label GitHub issues for findings
   actions: read
 
 jobs:
@@ -369,8 +385,172 @@ jobs:
             });
 
       # -----------------------------------------------------------------------
-      # 12. Enforce the security gate AFTER all artifacts have been saved.
-      #     This step re-fails the job when the scan found issues, so the
+      # 12. Open GitHub issues for findings.
+      #
+      #     Controlled by the create_issues input (default: false).
+      #     Only findings at or above issue_severity (default: high) are
+      #     turned into issues.  The step deduplicates against existing open
+      #     issues labelled 'appsec-engine' so re-running the workflow never
+      #     creates duplicate issues.  Capped at 50 new issues per run to
+      #     avoid flooding the issue tracker.
+      # -----------------------------------------------------------------------
+      - name: Open GitHub issues for findings
+        if: inputs.create_issues == true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const minSeverity = '${{ inputs.issue_severity || 'high' }}';
+            const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+            const minLevel = SEVERITY_ORDER[minSeverity] ?? 1;
+            const SEVERITY_EMOJI = { critical: '🔴', high: '🟠', medium: '🟡', low: '🔵' };
+            const LABEL_COLORS  = {
+              security: 'e11d48', 'appsec-engine': '6366f1',
+              critical: '7f1d1d', high: 'b91c1c', medium: 'd97706', low: '1d4ed8',
+            };
+
+            // ── 1. Parse SARIF and collect findings above the threshold ──────
+            let findings = [];
+            try {
+              const sarif = JSON.parse(fs.readFileSync('appsec-results.sarif', 'utf8'));
+              for (const run of sarif.runs || []) {
+                const toolName = run.tool?.driver?.name || 'unknown';
+                const rulesById = Object.fromEntries(
+                  (run.tool?.driver?.rules || []).map(r => [r.id, r])
+                );
+                for (const result of run.results || []) {
+                  const level = result.level || 'warning';
+                  const severity = level === 'error' ? 'high'
+                                 : level === 'note'  ? 'low'
+                                 :                     'medium';
+                  if (SEVERITY_ORDER[severity] > minLevel) continue;
+
+                  const loc  = result.locations?.[0]?.physicalLocation;
+                  const uri  = loc?.artifactLocation?.uri || 'unknown';
+                  const line = loc?.region?.startLine || 1;
+                  const snippet = loc?.region?.snippet?.text || '';
+                  const ruleId  = result.ruleId || 'unknown';
+                  const rule    = rulesById[ruleId] || {};
+                  const title   = rule.shortDescription?.text || rule.name || ruleId;
+                  const description = result.message?.text
+                                   || rule.fullDescription?.text
+                                   || '(no description)';
+                  findings.push({ toolName, severity, ruleId, uri, line, snippet, description, title });
+                }
+              }
+            } catch (e) {
+              console.error('Failed to parse SARIF:', e.message);
+              return;
+            }
+
+            console.log(`${findings.length} findings at or above '${minSeverity}' severity`);
+            if (findings.length === 0) { console.log('Nothing to do.'); return; }
+
+            // ── 2. Fetch existing open appsec-engine issues for deduplication ─
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'appsec-engine',
+              per_page: 100,
+            });
+            const existingTitles = new Set(existing.map(i => i.title));
+            console.log(`${existingTitles.size} existing open appsec-engine issues (dedup check)`);
+
+            // ── 3. Ensure required labels exist ──────────────────────────────
+            const neededLabels = new Set(['security', 'appsec-engine',
+              ...findings.map(f => f.severity)]);
+            for (const name of neededLabels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner, repo: context.repo.repo, name });
+              } catch {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name, color: LABEL_COLORS[name] || 'cccccc',
+                }).catch(() => {});   // ignore race-condition duplicates
+              }
+            }
+
+            // ── 4. Create issues (cap at 50 per run) ─────────────────────────
+            const MAX_PER_RUN = 50;
+            let created = 0, skipped = 0;
+
+            for (const f of findings) {
+              if (created >= MAX_PER_RUN) {
+                console.log(`Reached per-run cap (${MAX_PER_RUN}). Stopping.`);
+                break;
+              }
+
+              const issueTitle =
+                `[AppSec] ${f.severity.toUpperCase()}: ${f.ruleId} in ${f.uri}`;
+
+              if (existingTitles.has(issueTitle)) { skipped++; continue; }
+
+              const runUrl =
+                `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+              const bodyParts = [
+                `## ${SEVERITY_EMOJI[f.severity] || '⚪'} ${f.title}`,
+                '',
+                `> **Auto-generated by AppSec Engine** | [Workflow run](${runUrl}) | Commit: \`${context.sha.slice(0,7)}\``,
+                '',
+                '| Field | Value |',
+                '|-------|-------|',
+                `| **Severity** | \`${f.severity.toUpperCase()}\` |`,
+                `| **Tool** | ${f.toolName} |`,
+                `| **Rule ID** | \`${f.ruleId}\` |`,
+                `| **File** | \`${f.uri}\` |`,
+                `| **Line** | ${f.line} |`,
+                '',
+                '### Description',
+                '',
+                f.description,
+                '',
+              ];
+
+              if (f.snippet) {
+                bodyParts.push(
+                  '### Code Snippet', '',
+                  '```', f.snippet.slice(0, 500), '```', '',
+                );
+              }
+
+              bodyParts.push(
+                '### Remediation Checklist',
+                '',
+                '- [ ] Review the finding in the file and line listed above',
+                '- [ ] Apply a fix and re-run the security scan to verify',
+                '- [ ] Close this issue once the vulnerability is resolved',
+                '',
+                '---',
+                '_Auto-created by the [AppSec Engine Security Scan](https://github.com/IronKnight66/appsec-engine) workflow._',
+              );
+
+              try {
+                const { data: issue } = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: issueTitle,
+                  body: bodyParts.join('\n'),
+                  labels: ['security', 'appsec-engine', f.severity],
+                });
+                created++;
+                existingTitles.add(issueTitle);   // prevent intra-run dupes
+                console.log(`Created #${issue.number}: ${issueTitle}`);
+              } catch (e) {
+                console.error(`Failed to create issue for ${issueTitle}:`, e.message);
+              }
+            }
+
+            const remaining = findings.length - created - skipped;
+            console.log(`\nDone — created: ${created}, skipped (existing): ${skipped}` +
+              (remaining > 0 ? `, not processed (cap reached): ${remaining}` : ''));
+
+      # -----------------------------------------------------------------------
+      # 13. Enforce the security gate AFTER all artifacts have been saved.
+      #     This step re-fails the job when the scan found issues so the
       #     branch protection rule correctly blocks the merge.
       # -----------------------------------------------------------------------
       - name: Enforce security gate
