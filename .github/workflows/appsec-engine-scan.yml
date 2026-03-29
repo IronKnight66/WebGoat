@@ -77,9 +77,10 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Install AppSec Engine from GitHub
         env:
-          # Re-use the existing DEPENDABOT_PAT (classic PAT with repo scope)
-          # which already has read access to IronKnight66/appsec-engine.
-          GH_PAT: ${{ secrets.DEPENDABOT_PAT }}
+          # Dedicated PAT (classic, repo scope) with read access to
+          # IronKnight66/appsec-engine. Stored as APPSEC_ENGINE_PAT in
+          # WebGoat's repository secrets.
+          GH_PAT: ${{ secrets.APPSEC_ENGINE_PAT }}
         run: |
           pip install "git+https://${GH_PAT}@github.com/IronKnight66/appsec-engine.git"
 
