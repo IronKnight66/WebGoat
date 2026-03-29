@@ -76,9 +76,12 @@ jobs:
       #    safety / trufflehog integration wrappers.
       # -----------------------------------------------------------------------
       - name: Install AppSec Engine from GitHub
+        env:
+          # Re-use the existing DEPENDABOT_PAT (classic PAT with repo scope)
+          # which already has read access to IronKnight66/appsec-engine.
+          GH_PAT: ${{ secrets.DEPENDABOT_PAT }}
         run: |
-          # Install base package from git (extras resolved separately below)
-          pip install git+https://github.com/IronKnight66/appsec-engine.git
+          pip install "git+https://${GH_PAT}@github.com/IronKnight66/appsec-engine.git"
 
       # -----------------------------------------------------------------------
       # 4. Install the underlying security tools.
